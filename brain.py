@@ -1,10 +1,15 @@
 import sys
 import os
 from google import genai
+from dotenv import load_dotenv # Додано для локальних ключів
+
+# Завантажуємо змінні з файлу .env (якщо він є)
+load_dotenv()
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')  # type: ignore
 
+# Тепер ключ буде братися або з .env (локально), або з налаштувань Render (у хмарі)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
@@ -23,9 +28,12 @@ def summarize_text(article_text):
     {article_text}
     """
     
-    # Використовуємо 'gemini-2.0-flash-exp' (це найновіша робоча версія 2.0)
-    # Якщо вона не спрацює, скрипт миттєво переключиться на 1.5-flash
-    models_to_try = ['gemini-2.0-flash-exp', 'gemini-1.5-flash']
+    # Використовуємо найнадійніші моделі
+    models_to_try = [
+        'gemini-2.0-flash-exp', 
+        'gemini-1.5-flash',
+        'gemini-3.1-flash-lite-preview' # Додав твою улюблену 3.1 як запасну
+    ]
     
     for model_name in models_to_try:
         try:
@@ -40,4 +48,9 @@ def summarize_text(article_text):
     return "⚠️ ШІ тимчасово перевантажений. Спробую пізніше."
 
 if __name__ == "__main__":
-    print(summarize_text("Тест зв'язку"))
+    # Тест для перевірки, чи підтягнувся ключ
+    if not GOOGLE_API_KEY:
+        print("❌ ПОМИЛКА: Ключ GOOGLE_API_KEY не знайдено! Перевір файл .env")
+    else:
+        print("🧠 Gemini підключено. Думаю над тестом...")
+        print(summarize_text("Штучний інтелект стає основою сучасних авто."))
