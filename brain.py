@@ -1,56 +1,48 @@
 import sys
 import os
 from google import genai
-from dotenv import load_dotenv # Додано для локальних ключів
+from dotenv import load_dotenv
 
-# Завантажуємо змінні з файлу .env (якщо він є)
 load_dotenv()
 
 if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8')  # type: ignore
+    sys.stdout.reconfigure(encoding='utf-8')
 
-# Тепер ключ буде братися або з .env (локально), або з налаштувань Render (у хмарі)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
-def summarize_text(article_text):
-    prompt = f"""
-    Ти — крутий український техно-блогер CyberWheel. 
-    Зроби соковитий дайджест статті УКРАЇНСЬКОЮ мовою.
-    Текст може бути англійською — переклади та адаптуй.
-    
-    Стиль: розмовний, з емодзі, професійний.
-    📌 **Про що мова:** (1 речення)
-    🔥 **Головні тези:** (3-4 пункти)
-    💡 **Чому це важливо:** (висновок)
+def summarize_text(article_text, original_title, is_morning=False):
+    greeting_instruction = ""
+    if is_morning:
+        greeting_instruction = "Почни з короткого професійного вітання (наприклад: 'Вітаю! CyberWheel підготував огляд головних подій дня.')."
+    else:
+        greeting_instruction = "НЕ ВИКОРИСТОВУЙ жодних вітань. Одразу переходь до суті."
 
-    Текст статті:
-    {article_text}
+    prompt = f"""
+    Ти — головний аналітик CyberWheel. Твій стиль: спокійний, експертний, без сленгу.
+    
+    ЗАВДАННЯ:
+    1. Створи влучний заголовок УКРАЇНСЬКОЮ на основі оригіналу: "{original_title}".
+    2. {greeting_instruction}
+    3. Зроби аналіз тексту. Текст може бути англійською — обов'язково переклади.
+    
+    ФОРМАТ ВІДПОВІДІ (СУВОРО!):
+    [TITLE]: (тут український заголовок)
+    
+    (вітання, якщо ранок)
+    
+    📌 **Суть:** (1-2 речення)
+    🔥 **Ключові факти:** (3-4 пункти з емодзі)
+    💡 **Вердикт CyberWheel:** (твій експертний висновок)
+
+    ТЕКСТ: {article_text}
     """
     
-    # Використовуємо найнадійніші моделі
-    models_to_try = [
-        'gemini-2.0-flash-exp', 
-        'gemini-1.5-flash',
-        'gemini-3.1-flash-lite-preview' # Додав твою улюблену 3.1 як запасну
-    ]
-    
-    for model_name in models_to_try:
+    models = ['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-3.1-flash-lite-preview']
+    for m in models:
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt
-            )
+            response = client.models.generate_content(model=m, contents=prompt)
             return response.text
-        except Exception:
-            continue 
-            
-    return "⚠️ ШІ тимчасово перевантажений. Спробую пізніше."
-
-if __name__ == "__main__":
-    # Тест для перевірки, чи підтягнувся ключ
-    if not GOOGLE_API_KEY:
-        print("❌ ПОМИЛКА: Ключ GOOGLE_API_KEY не знайдено! Перевір файл .env")
-    else:
-        print("🧠 Gemini підключено. Думаю над тестом...")
-        print(summarize_text("Штучний інтелект стає основою сучасних авто."))
+        except:
+            continue
+    return "⚠️ Помилка ШІ."
