@@ -48,10 +48,19 @@ def run_auto_scout():
 
 if __name__ == "__main__":
     import web_server
+    
+    print("🌐 Запускаю фоновий веб-сервер...")
     web_server.keep_alive()
+    
+    print("🚀 Автоматичний планувальник CyberWheel стартував!")
+    
     while True:
         try:
+            # Одразу запускаємо перевірку при старті
             run_auto_scout()
         except Exception as e:
-            print(f"Error: {e}")
-        time.sleep(3600) # Перевірка щогодини
+            print(f"❌ Критична помилка: {e}")
+            
+        # Після перевірки засинаємо на 1 годину (3600 секунд)
+        print("😴 Патрулювання завершено. Наступна перевірка через 60 хвилин...")
+        time.sleep(3600)
