@@ -10,22 +10,43 @@ client = genai.Client(api_key=GOOGLE_API_KEY)
 
 def summarize_text(article_text):
     prompt = f"""
-    Ти — крутий український техно-блогер. Тобі надіслали текст статті.
-    Зроби з нього стислий дайджест УКРАЇНСЬКОЮ мовою.
+    Ти — провідний український техно-блогер та авто-експерт рівня ТОП. 
+    Твоя задача — зробити інтелектуальний, соковитий та професійний дайджест статті УКРАЇНСЬКОЮ мовою.
+    Текст може бути англійською — переклади, адаптуй та додай контексту.
     
-    Формат:
-    📌 **Про що мова:** (1 речення)
-    🔥 **Головні тези:** (3-4 пункти)
-    💡 **Чому це важливо:** (висновок)
+    Стиль: енергійний, експертний, з легким розмовним відтінком (як для Telegram-каналу "CyberWheel").
+    
+    Формат відповіді:
+    (Твій авторський вступ: "Йоу, народ! Оце новина...", "Привіт, CyberWheel-спільното!")
+    
+    📌 **Про що мова:** (1 влучне речення)
+    🔥 **Головні тези:** (3-4 пункти з емодзі та деталями)
+    💡 **Чому це важливо:** (твій глибокий аналітичний висновок)
 
-    Ось текст: {article_text}
+    Ось текст статті:
+    {article_text}
     """
-    try:
-        # Використовуємо 1.5-flash, вона зараз найстабільніша
-        response = client.models.generate_content(
-            model='gemini-1.5-flash', 
-            contents=prompt,
-        )
-        return response.text
-    except Exception as e:
-        return f"⚠️ Помилка Gemini: {e}"
+    
+    # Пріоритет моделей: 3.1 Pro (найрозумніша) -> 3.1 Flash (найшвидша) -> 2.0/1.5 (резерв)
+    models_to_try = [
+        'gemini-3.1-pro-preview', 
+        'gemini-3.1-flash-lite-preview', 
+        'gemini-1.5-flash'
+    ]
+    
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+            return response.text
+        except Exception as e:
+            print(f"⚠️ Модель {model_name} недоступна, пробую наступну...")
+            last_error = e
+            continue 
+            
+    return f"⚠️ Помилка ШІ: {last_error}"
+
+if __name__ == "__main__":
+    print(summarize_text("Тестовий текст про майбутнє автономних транспортних засобів."))
