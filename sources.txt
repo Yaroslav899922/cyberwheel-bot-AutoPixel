@@ -1,0 +1,7 @@
+https://ain.ua/feed/
+https://itc.ua/ua/feed/
+https://nv.ua/ukr/techno.rss
+https://www.caranddriver.com/rss/all.xml/
+https://www.motortrend.com/f/news/
+https://www.autoblog.com/rss.xml
+https://electrek.co/feed/
