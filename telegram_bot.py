@@ -29,7 +29,7 @@ def send_telegram_message(text, url=None, image_url=None):
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
-        "parse_mode": "Markdown", # Дозволяє жирний шрифт та курсив
+        "parse_mode": "HTML", # Дозволяє жирний шрифт та курсив
         "disable_web_page_preview": False # Залишаємо прев'ю сайту для картинок
     }
     
