@@ -5,3 +5,4 @@ https://www.caranddriver.com/rss/all.xml/
 https://www.motortrend.com/f/news/
 https://www.autoblog.com/rss.xml
 https://electrek.co/feed/
+https://www.skoda-auto.ua/
