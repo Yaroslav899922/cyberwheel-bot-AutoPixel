@@ -1,12 +1,13 @@
 import sys
 import os
+import re # ДОДАНО: бібліотека для автоматичної заміни тексту
 from google import genai
 from dotenv import load_dotenv
 
 load_dotenv()
 
 if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding='utf-8')  # type: ignore
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 client = genai.Client(api_key=GOOGLE_API_KEY)
@@ -44,7 +45,17 @@ def summarize_text(article_text, original_title, is_morning=False):
     for m in models:
         try:
             response = client.models.generate_content(model=m, contents=prompt)
-            return response.text
+            raw_text = response.text
+            
+            # --- ЗАЛІЗОБЕТОННИЙ ФІЛЬТР ФОРМАТУВАННЯ ---
+            # 1. Якщо ШІ написав **жирний текст**, міняємо це на <b>жирний текст</b>
+            cleaned_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', raw_text)
+            
+            # 2. Якщо ШІ поставив зірочку як маркер списку (* Факт:), міняємо на красиву крапку (• Факт:)
+            cleaned_text = cleaned_text.replace('\n* ', '\n• ')
+            
+            return cleaned_text
+            
         except:
             continue
     return "⚠️ Помилка ШІ."
