@@ -1,6 +1,7 @@
 import requests
 import sys
 import os
+import json # ДОДАНО: потрібно для формування кнопки
 from dotenv import load_dotenv # Додано для роботи з .env
 
 # Завантажуємо змінні з файлу .env (якщо він є локально)
@@ -14,28 +15,39 @@ if hasattr(sys.stdout, 'reconfigure'):
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-def send_telegram_message(text):
-    """Відправляє текстове повідомлення у ваш Telegram"""
+# ЗМІНЕНО: Тепер функція приймає text та url (посилання)
+def send_telegram_message(text, url=None, image_url=None):
+    """Відправляє текстове повідомлення у ваш Telegram з кнопкою"""
     
     # Перевірка, чи завантажились ключі
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("❌ Помилка Telegram: TELEGRAM_TOKEN або CHAT_ID не знайдено!")
         return
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    endpoint = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
-        "parse_mode": "Markdown" # Дозволяє жирний шрифт та курсив
+        "parse_mode": "Markdown", # Дозволяє жирний шрифт та курсив
+        "disable_web_page_preview": False # Залишаємо прев'ю сайту для картинок
     }
     
+    # ДОДАНО: Якщо передано посилання — створюємо кнопку
+    if url:
+        reply_markup = {
+            "inline_keyboard": [[
+                {"text": "🌐 Читати оригінал", "url": url}
+            ]]
+        }
+        payload["reply_markup"] = json.dumps(reply_markup)
+    
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.post(endpoint, json=payload, timeout=10)
         if response.status_code == 200:
             print("📤 [Telegram] Повідомлення успішно відправлено!")
         else:
-            print(f"❌ [Telegram] Помилка. Код: {response.status_code}")
+            print(f"❌ [Telegram] Помилка. Код: {response.status_code}, Відповідь: {response.text}")
     except Exception as e:
         print(f"❌ [Telegram] Помилка з'єднання: {e}")
 
@@ -46,4 +58,4 @@ if __name__ == "__main__":
     else:
         print("📡 Тестуємо зв'язок з Telegram...")
         test_msg = "👋 Привіт! Це тест системи безпеки з використанням .env файлу."
-        send_telegram_message(test_msg)
+        send_telegram_message(test_msg, "https://google.com")
