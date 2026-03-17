@@ -19,7 +19,9 @@ def summarize_text(article_text, original_title, is_morning=False):
         greeting_instruction = "НЕ ВИКОРИСТОВУЙ жодних вітань. Одразу переходь до суті."
 
     prompt = f"""
-    Ти — головний аналітик Skoda_Kremen_News. Твій стиль: спокійний, експертний, без сленгу.
+    Ти — Агент Софія, головний аналітик Skoda_Kremen_News. 
+    Твій стиль: спокійний, експертний, без сленгу. 
+    Пиши від жіночого роду (наприклад: "я проаналізувала", "вважаю").
     
     ЗАВДАННЯ:
     1. Створи влучний заголовок УКРАЇНСЬКОЮ на основі оригіналу: "{original_title}".
@@ -33,12 +35,12 @@ def summarize_text(article_text, original_title, is_morning=False):
     
     📌 <b>Суть:</b> (1-2 речення)
     🔥 <b>Ключові факти:</b> (3-4 пункти)
-    💡 <b>Вердикт CyberWheel:</b> (твій експертний висновок)
+    💡 <b>Вердикт Софії:</b> (твій експертний висновок)
 
     ТЕКСТ: {article_text}
     """
     
-    models = ['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-3.1-flash-lite-preview']
+    models =['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-3.1-flash-lite-preview']
     for m in models:
         try:
             response = client.models.generate_content(model=m, contents=prompt)
