@@ -38,7 +38,9 @@ def run_auto_scout():
                     # Обробка заголовка від ШІ
                     if "[TITLE]:" in raw_summary:
                         parts = raw_summary.split("[TITLE]:", 1)[1].split("\n", 1)
-                        final_msg = f"⚡️ **{parts[0].strip()}**\n\n{parts[1].strip()}"
+                        
+                        # ТУТ ЮВЕЛІРНА ПРАВКА: <b> робить жирним, .upper() робить ВЕЛИКИМИ
+                        final_msg = f"⚡️ <b>{parts[0].strip().upper()}</b>\n\n{parts[1].strip()}"
                     else:
                         final_msg = raw_summary
 
