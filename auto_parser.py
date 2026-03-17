@@ -23,7 +23,7 @@ def save_processed_url(url):
 def run_auto_scout():
     kyiv_tz = pytz.timezone('Europe/Kiev')
     now = datetime.now(kyiv_tz)
-    is_morning = (now.hour == 8) # Вітаємося тільки в 8:00
+    is_morning = (now.hour == 8) # Вітаємося тільки в 8:00 в першому повідомленні
     
     processed_urls = load_processed_urls()
     
@@ -61,6 +61,6 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"❌ Критична помилка: {e}")
             
-        # Після перевірки засинаємо на 1 годину (3600 секунд)
-        print("😴 Патрулювання завершено. Наступна перевірка через 60 хвилин...")
-        time.sleep(3600)
+        # Після перевірки засинаємо на 30 хвилин (1800 секунд)
+        print("😴 Патрулювання завершено. Наступна перевірка через 30 хвилин...")
+        time.sleep(1800)
