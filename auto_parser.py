@@ -44,14 +44,15 @@ def run_auto_scout():
                     else:
                         final_msg = raw_summary
 
-                    # === ДОДАНО: БЛОК З ПОСИЛАННЯМИ НА СОЦМЕРЕЖІ ===
+                    # === ДОДАНО: БЛОК З ПОСИЛАННЯМИ НА СОЦМЕРЕЖІ ТА САЙТ ===
                     social_links = (
                         "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
                         "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
-                        "📘 <a href='https://www.facebook.com/skodakremen'>Facebook</a>"
+                        "📘 <a href='https://www.facebook.com/skodakremen'>Facebook</a>  |  "
+                        "🌐 <a href='https://www.avtocenter-kremenchuk.site/'>Наш сайт</a>"
                     )
                     final_msg += social_links
-                    # ===============================================
+                    # ========================================================
 
                     # ХІРУРГІЧНА ПРАВКА: Передаємо боту картинку (image_url)!
                     telegram_bot.send_telegram_message(
