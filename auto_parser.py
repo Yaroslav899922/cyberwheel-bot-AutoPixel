@@ -13,6 +13,47 @@ if os.path.exists("sources.txt"):
     with open("sources.txt", "r", encoding="utf-8") as f:
         RSS_SOURCES =[line.strip() for line in f if line.strip()]
 
+# === ДОДАНО: ФІЛЬТРАЦІЯ КОНТЕНТУ (ХІРУРГІЧНА ВСТАВКА) ===
+HARD_BLACKLIST =[
+    "смартфон", "айфон", "iphone", "ipad", "ios", "android", "планшет", "навушник", 
+    "годинник", "ноутбук", "відеокарт", "материнськ", "процесор", "rtx", "geforce", 
+    "playstation", "xbox", "nintendo", "steam", "консоль", "гра ", "ігри", "геймер", 
+    "шутер", "кіно", "фільм", "серіал", "netflix", "пзрк", "зброя", "військ", "боєприпас", 
+    "гранатомет", "3d-друк", "пилосос", "холодильник", "пральн", "github", "directx", 
+    "програмуван", "код "
+]
+
+CONDITIONAL_LIST =[
+    "депутат", "парламент", "вибори", "партія", "корупц", "скандал", "мітинг", 
+    "офіс президента", "зеленськ", "трамп", "путін", "криптовалют", "біткоїн", 
+    "bitcoin", "ethereum", "крипт", "токен", "nft", "блокчейн"
+]
+
+SAVIOUR_LIST =[
+    "авто", "машин", "skoda", "шкода", "електро", "tesla", "завод", "виробн", 
+    "мит", "подат", "дилер", "лізинг", "купити", "продаж", "імпорт", "експорт"
+]
+
+def is_relevant_news(title, text):
+    content = (title + " " + text).lower()
+    
+    # 1. Жорсткий фільтр - якщо є хоч одне слово, одразу в смітник
+    for word in HARD_BLACKLIST:
+        if word in content:
+            return False
+            
+    # 2. Умовний фільтр (Політика/Крипта)
+    has_conditional = any(word in content for word in CONDITIONAL_LIST)
+    if has_conditional:
+        # Якщо є політика/крипта, перевіряємо чи є авто-слова (рятівники)
+        has_saviour = any(word in content for word in SAVIOUR_LIST)
+        if not has_saviour:
+            return False # Є політика, але немає машин -> смітник
+            
+    # Якщо перевірки пройдені - пропускаємо до ШІ
+    return True
+# ========================================================
+
 def load_processed_urls():
     if not os.path.exists(DB_FILE): return set()
     with open(DB_FILE, "r", encoding="utf-8") as f: return set(line.strip() for line in f)
@@ -33,6 +74,16 @@ def run_auto_scout():
             if entry.link not in processed_urls:
                 data = main.fetch_article_data(entry.link)
                 if data and data['text']:
+                    
+                    # === ХІРУРГІЧНА ПРАВКА: Застосовуємо фільтр перед ШІ ===
+                    if not is_relevant_news(entry.title, data['text']):
+                        print(f"🗑️ Пропущено (сміття/політика): {entry.title}")
+                        save_processed_url(entry.link)
+                        processed_urls.add(entry.link)
+                        time.sleep(1)
+                        continue # Йдемо до наступної новини
+                    # =========================================================
+
                     raw_summary = brain.summarize_text(data['text'], entry.title, is_morning)
                     
                     # Обробка заголовка від ШІ
@@ -62,6 +113,7 @@ def run_auto_scout():
                     )
                     
                     save_processed_url(entry.link)
+                    processed_urls.add(entry.link) # Додано для оновлення локальної пам'яті в поточному циклі
                     time.sleep(5)
 
 if __name__ == "__main__":
