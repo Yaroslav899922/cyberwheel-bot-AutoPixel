@@ -11,7 +11,7 @@ DB_FILE = "parsed_urls.txt"
 RSS_SOURCES =[]
 if os.path.exists("sources.txt"):
     with open("sources.txt", "r", encoding="utf-8") as f:
-        RSS_SOURCES = [line.strip() for line in f if line.strip()]
+        RSS_SOURCES =[line.strip() for line in f if line.strip()]
 
 def load_processed_urls():
     if not os.path.exists(DB_FILE): return set()
@@ -53,7 +53,13 @@ def run_auto_scout():
                     final_msg += social_links
                     # ===============================================
 
-                    telegram_bot.send_telegram_message(final_msg, entry.link)
+                    # ХІРУРГІЧНА ПРАВКА: Передаємо боту картинку (image_url)!
+                    telegram_bot.send_telegram_message(
+                        text=final_msg, 
+                        url=entry.link,
+                        image_url=data.get('image') 
+                    )
+                    
                     save_processed_url(entry.link)
                     time.sleep(5)
 
