@@ -15,23 +15,34 @@ if hasattr(sys.stdout, 'reconfigure'):
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# ЗМІНЕНО: Тепер функція приймає text та url (посилання)
+# ЗМІНЕНО: Тепер функція приймає text, url (посилання) та image_url (фото)
 def send_telegram_message(text, url=None, image_url=None):
-    """Відправляє текстове повідомлення у ваш Telegram з кнопкою"""
+    """Відправляє фото з текстом або звичайне повідомлення у ваш Telegram з кнопкою"""
     
     # Перевірка, чи завантажились ключі
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("❌ Помилка Telegram: TELEGRAM_TOKEN або CHAT_ID не знайдено!")
         return
 
-    endpoint = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML", # Дозволяє жирний шрифт та курсив
-        "disable_web_page_preview": False # Залишаємо прев'ю сайту для картинок
-    }
+    # ХІРУРГІЧНА ПРАВКА: Логіка відправки великого ФОТО
+    # Якщо є картинка і текст влазить у ліміт підпису Telegram (1024 символи)
+    if image_url and image_url.startswith('http') and len(text) <= 1024:
+        endpoint = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+        payload = {
+            "chat_id": CHAT_ID,
+            "photo": image_url,
+            "caption": text,
+            "parse_mode": "HTML"
+        }
+    else:
+        # Якщо фото немає або текст задовгий — шлемо просто текст
+        endpoint = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True # ЖОРСТКО ВИМИКАЄМО прев'ю, щоб не ліз Facebook
+        }
     
     # ДОДАНО: Якщо передано посилання — створюємо кнопку
     if url:
@@ -40,14 +51,24 @@ def send_telegram_message(text, url=None, image_url=None):
                 {"text": "🌐 Читати оригінал", "url": url}
             ]]
         }
-        payload["reply_markup"] = json.dumps(reply_markup)
+        payload["reply_markup"] = reply_markup # Передаємо словник, json=payload сам його конвертує
     
     try:
-        response = requests.post(endpoint, json=payload, timeout=10)
+        response = requests.post(endpoint, json=payload, timeout=15)
+        
+        # Запобіжник: якщо фото "бите" і Telegram його відхилив, пробуємо відправити як текст
+        if response.status_code != 200 and "sendPhoto" in endpoint:
+            print(f"🔄 Помилка фото ({response.status_code}). Спроба відправити як текст...")
+            endpoint = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            payload.pop("photo", None)
+            payload["text"] = payload.pop("caption")
+            payload["disable_web_page_preview"] = True
+            response = requests.post(endpoint, json=payload, timeout=15)
+
         if response.status_code == 200:
-            print("📤 [Telegram] Повідомлення успішно відправлено!")
+            print("📤[Telegram] Повідомлення успішно відправлено!")
         else:
-            print(f"❌ [Telegram] Помилка. Код: {response.status_code}, Відповідь: {response.text}")
+            print(f"❌[Telegram] Помилка. Код: {response.status_code}, Відповідь: {response.text}")
     except Exception as e:
         print(f"❌ [Telegram] Помилка з'єднання: {e}")
 
