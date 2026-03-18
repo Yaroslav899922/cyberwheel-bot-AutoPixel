@@ -8,7 +8,7 @@ import brain
 import telegram_bot
 
 DB_FILE = "parsed_urls.txt"
-RSS_SOURCES = []
+RSS_SOURCES =[]
 if os.path.exists("sources.txt"):
     with open("sources.txt", "r", encoding="utf-8") as f:
         RSS_SOURCES = [line.strip() for line in f if line.strip()]
@@ -43,6 +43,15 @@ def run_auto_scout():
                         final_msg = f"⚡️ <b>{parts[0].strip().upper()}</b>\n\n{parts[1].strip()}"
                     else:
                         final_msg = raw_summary
+
+                    # === ДОДАНО: БЛОК З ПОСИЛАННЯМИ НА СОЦМЕРЕЖІ ===
+                    social_links = (
+                        "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
+                        "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
+                        "📘 <a href='https://www.facebook.com/skodakremen'>Facebook</a>"
+                    )
+                    final_msg += social_links
+                    # ===============================================
 
                     telegram_bot.send_telegram_message(final_msg, entry.link)
                     save_processed_url(entry.link)
