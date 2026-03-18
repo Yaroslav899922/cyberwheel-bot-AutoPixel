@@ -20,7 +20,7 @@ def summarize_text(article_text, original_title, is_morning=False):
         greeting_instruction = "НЕ ВИКОРИСТОВУЙ жодних вітань. Одразу переходь до суті."
 
     prompt = f"""
-    Ти — Агент Софія, головний аналітик Škoda_Kremen_News. 
+    Ти — Агент Софія, головний аналітик Skoda_Kremen_News. 
     Твій стиль: спокійний, експертний, без сленгу. 
     Пиши від жіночого роду (наприклад: "я проаналізувала", "вважаю").
     
@@ -61,10 +61,13 @@ def summarize_text(article_text, original_title, is_morning=False):
             cleaned_text = cleaned_text.replace('\n* ', '\n• ')
 
             # 3. ХІРУРГІЧНА ПРАВКА: Робимо бренд Škoda жирним та з правильною літерою Š
-            # Шукаємо всі варіації (Skoda, skoda, Škoda) і примусово міняємо на <b>Škoda</b>
             cleaned_text = re.sub(r'(?i)\b(Skoda|Škoda)\b', '<b>Škoda</b>', cleaned_text)
             
-            # Запобіжник від подвійних тегів (якщо ШІ сам здогадався виділити слово жирним)
+            # 4. ДОДАНО: Робимо назви моделей Škoda також жирними!
+            models_pattern = r'(?i)\b(Fabia|Scala|Octavia|Superb|Kamiq|Karoq|Kodiaq|Enyaq)\b'
+            cleaned_text = re.sub(models_pattern, r'<b>\1</b>', cleaned_text)
+            
+            # Запобіжник від подвійних тегів (якщо ШІ сам або фільтр двічі наклав <b>)
             cleaned_text = cleaned_text.replace('<b><b>', '<b>').replace('</b></b>', '</b>')
             
             return cleaned_text
