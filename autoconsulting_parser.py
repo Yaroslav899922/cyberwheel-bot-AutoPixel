@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 SECTIONS = [
     {"name": "CARS",          "url": "https://autoconsulting.ua/news.php?part=CARS"},
     {"name": "SALES",         "url": "https://autoconsulting.ua/news.php?part=SALES"},
+    {"name": "Статистика",    "url": "https://autoconsulting.ua/news.php?catid=41"},
     {"name": "Електромобілі", "url": "https://autoconsulting.ua/news.php?catid=39"},
 ]
 
@@ -17,10 +18,7 @@ HEADERS = {
     "Accept-Language": "uk,ru;q=0.9,en;q=0.8",
 }
 
-# ✅ ЗАХИСТ ВІД СТАРИХ СТАТЕЙ:
-# Статті з sid нижче цього порогу вважаються "архівними" і ігноруються.
-# Поточні нові статті мають sid ~60600+
-# Якщо через місяць бот почне пропускати нові статті — підніми це число.
+# Статті з sid нижче цього порогу — архівні, ігноруємо
 MIN_SID = 60500
 
 def fetch_page(url):
@@ -33,10 +31,6 @@ def fetch_page(url):
         return None
 
 def get_article_links(section_url):
-    """
-    Витягує посилання на статті та фільтрує за MIN_SID.
-    Це головний захист від публікації архівних матеріалів.
-    """
     html = fetch_page(section_url)
     if not html:
         return []
@@ -47,22 +41,13 @@ def get_article_links(section_url):
     for a_tag in soup.find_all("a", href=True):
         href = a_tag["href"]
         if "article.php?sid=" in href:
-            # Витягуємо числовий sid
             sid_match = re.search(r'sid=(\d+)', href)
             if not sid_match:
                 continue
-
             sid = int(sid_match.group(1))
-
-            # ✅ Ігноруємо старі архівні статті
             if sid < MIN_SID:
                 continue
-
-            if href.startswith("http"):
-                full_url = href
-            else:
-                full_url = BASE_URL + "/" + href.lstrip("/")
-
+            full_url = href if href.startswith("http") else BASE_URL + "/" + href.lstrip("/")
             if full_url not in links:
                 links.append(full_url)
 
@@ -75,14 +60,12 @@ def fetch_article_text(article_url):
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # Заголовок
     title = ""
     title_tag = soup.find("title")
     if title_tag:
         raw_title = title_tag.get_text(strip=True)
         title = raw_title.split(":")[0].strip() if ":" in raw_title else raw_title
 
-    # Текст — шукаємо найбільший блок
     text = ""
     best_td = None
     best_len = 0
@@ -101,7 +84,6 @@ def fetch_article_text(article_url):
         print(f"⚠️ [AutoConsulting] Текст не знайдено: {article_url}")
         return None
 
-    # Зображення
     image_url = None
     for img in soup.find_all("img", src=True):
         src = img["src"]
@@ -113,8 +95,18 @@ def fetch_article_text(article_url):
     print(f"✅ [AutoConsulting] Завантажено: {title[:60]}...")
     return {"text": text, "title": title, "image": image_url}
 
+def normalize_title(title):
+    """
+    Нормалізує заголовок для порівняння — прибирає пунктуацію і зводить до нижнього регістру.
+    Потрібно щоб "Камери: 337 одиниць" і "Камери: 377 одиниць" не вважались однаковими,
+    але "Камери ПДР в Україні" і "камери пдр в україні" — вважались.
+    """
+    return re.sub(r'[^\w\s]', '', title.lower()).strip()
+
 def get_new_articles(processed_urls):
     new_articles = []
+    # ✅ ДЕДУПЛІКАЦІЯ: зберігаємо заголовки які вже додали в цьому циклі
+    seen_titles = set()
 
     for section in SECTIONS:
         print(f"\n📡 [AutoConsulting] Перевіряю розділ: {section['name']}")
@@ -124,11 +116,21 @@ def get_new_articles(processed_urls):
         new_links = [l for l in links if l not in processed_urls]
         print(f"   Нових (не опублікованих): {len(new_links)}")
 
-        # Максимум 2 статті з розділу за цикл
         for url in new_links[:2]:
             data = fetch_article_text(url)
-            if data:
-                new_articles.append({"url": url, "data": data})
+            if not data:
+                continue
+
+            # ✅ Перевіряємо чи не публікували вже статтю з таким заголовком у цьому циклі
+            norm = normalize_title(data['title'])
+            if norm in seen_titles:
+                print(f"⏭️ Пропускаємо дубль за заголовком: {data['title'][:60]}")
+                # Все одно записуємо URL у processed щоб більше не перевіряти
+                processed_urls.add(url)
+                continue
+
+            seen_titles.add(norm)
+            new_articles.append({"url": url, "data": data})
 
     return new_articles
 
