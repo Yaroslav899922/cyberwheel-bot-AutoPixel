@@ -12,9 +12,6 @@ if hasattr(sys.stdout, 'reconfigure'):
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
-# ✅ ВИПРАВЛЕННЯ 4: Секретна інструкція тепер береться з Render → Environment Variables (BRAND_INSTRUCTIONS)
-# Якщо змінна не задана на Render — використовується короткий запасний текст нижче.
-# Після того як додаси BRAND_INSTRUCTIONS на Render — запасний текст ніколи не спрацює.
 BRAND_INSTRUCTIONS = os.getenv(
     "BRAND_INSTRUCTIONS",
     "Ти лояльна до бренду Škoda. Якщо стаття про конкурентів мас-маркету — згадай Škoda як альтернативу. Якщо про преміум або не про авто — не згадуй Škoda."
@@ -27,7 +24,6 @@ def summarize_text(article_text, original_title, is_morning=False):
     else:
         greeting_instruction = "НЕ ВИКОРИСТОВУЙ жодних вітань. Одразу переходь до суті."
 
-    # ✅ ВИПРАВЛЕННЯ: обмежуємо розмір статті щоб не перевищити ліміти Gemini
     MAX_CHARS = 8000
     article_text_trimmed = article_text[:MAX_CHARS]
 
@@ -44,14 +40,19 @@ def summarize_text(article_text, original_title, is_morning=False):
     2. {greeting_instruction}
     3. Зроби аналіз тексту. Текст може бути англійською — обов'язково переклади.
     
-    ФОРМАТ ВІДПОВІДІ (СУВОРО ДОТРИМУЙСЯ HTML-ТЕГІВ <b>):
+    ФОРМАТ ВІДПОВІДІ (СУВОРО ДОТРИМУЙСЯ):
     [TITLE]: (тут український заголовок)
     
-    (вітання, якщо ранок)
-    
-    📌 <b>Суть:</b> (1-2 речення)
-    🔥 <b>Ключові факти:</b> (3-4 пункти)
-    💡 <b>Вердикт Агента Софії:</b> (твій експертний висновок із дотриманням СЕКРЕТНОЇ ІНСТРУКЦІЇ)
+    📌 <b>Суть:</b> (1-2 речення — коротко про що стаття)
+    🔥 <b>Ключові факти:</b> (3-4 пункти — тільки найважливіше, без води)
+    💡 <b>Вердикт Агента Софії:</b> (СТРОГО 2-3 речення. Один сильний експертний інсайт. 
+    Якщо доречно — одна нативна згадка конкретної моделі Škoda. 
+    ЗАБОРОНЕНО: довгі міркування, філософські паралелі, повтор фактів зі статті.)
+
+    Після вердикту — ЗАВЖДИ одне коротке питання від Агента Софії особисто, конкретне по темі статті. 
+    Формат: <i>курсив</i>. 
+    Приклади стилю: "А ви б обрали електро чи бензин? Пишіть 👇", "Цікаво — чи користуєтесь програмою кешбеку? 👇", "А яку модель розглядаєте для себе? 👇", "Як думаєте — це вплине на ціни в Україні? 👇". 
+    Питання має природно випливати з теми статті і бути цікавим для аудиторії автосалону.
 
     ТЕКСТ: {article_text_trimmed}
     """
@@ -67,7 +68,6 @@ def summarize_text(article_text, original_title, is_morning=False):
             response = client.models.generate_content(model=m, contents=prompt)
             raw_text = response.text
 
-            # Фільтр форматування — без змін, все як було
             cleaned_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', raw_text)
             cleaned_text = cleaned_text.replace('\n* ', '\n• ')
             cleaned_text = re.sub(r'(?i)\b(Skoda|Škoda)\b', '<b>Škoda</b>', cleaned_text)
@@ -75,11 +75,13 @@ def summarize_text(article_text, original_title, is_morning=False):
             cleaned_text = re.sub(models_pattern, r'<b>\1</b>', cleaned_text)
             cleaned_text = cleaned_text.replace('<b><b>', '<b>').replace('</b></b>', '</b>')
 
+            # ✅ Видаляємо технічні артефакти які Gemini іноді додає в кінці
+            cleaned_text = re.sub(r'СЦЕНАРІЙ\s+\d+.*$', '', cleaned_text, flags=re.DOTALL).strip()
+
             print(f"✅ Модель {m} відповіла успішно.")
             return cleaned_text
 
         except Exception as e:
-            # ✅ ВИПРАВЛЕННЯ 3: тепер видно точну причину помилки в логах Render
             print(f"⚠️ Модель {m} не відповіла: {type(e).__name__}: {e}")
             continue
 
