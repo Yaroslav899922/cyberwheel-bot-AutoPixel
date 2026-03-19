@@ -3,4 +3,4 @@ https://www.motortrend.com/f/news/
 https://www.autoblog.com/rss.xml
 https://electrek.co/feed/
 https://itc.ua/ua/avto-ua/feed/
-https://autoconsulting.ua/news.php
+
