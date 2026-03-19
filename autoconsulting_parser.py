@@ -3,10 +3,20 @@ import re
 from bs4 import BeautifulSoup
 
 SECTIONS = [
-    {"name": "CARS",          "url": "https://autoconsulting.ua/news.php?part=CARS"},
-    {"name": "SALES",         "url": "https://autoconsulting.ua/news.php?part=SALES"},
-    {"name": "Статистика",    "url": "https://autoconsulting.ua/news.php?catid=41"},
-    {"name": "Електромобілі", "url": "https://autoconsulting.ua/news.php?catid=39"},
+    {"name": "Ринок автомобілів",        "url": "https://autoconsulting.ua/news.php?catid=16"},
+    {"name": "Новини виробників",         "url": "https://autoconsulting.ua/news.php?catid=4"},
+    {"name": "Електромобілі",             "url": "https://autoconsulting.ua/news.php?catid=39"},
+    {"name": "Статистика автопродажів",   "url": "https://autoconsulting.ua/news.php?catid=41"},
+    {"name": "Ринок автобусів",           "url": "https://autoconsulting.ua/news.php?catid=5"},
+    {"name": "Ринок вантажівок",          "url": "https://autoconsulting.ua/news.php?catid=9"},
+    {"name": "Виробництво автомобілів",   "url": "https://autoconsulting.ua/news.php?catid=17"},
+    {"name": "Законодавство",             "url": "https://autoconsulting.ua/news.php?catid=13"},
+    {"name": "Автобізнес LIFE",           "url": "https://autoconsulting.ua/news.php?catid=38"},
+    {"name": "Дилерська мережа",          "url": "https://autoconsulting.ua/news.php?catid=35"},
+    {"name": "Кредити/лізинг/страхування","url": "https://autoconsulting.ua/news.php?catid=34"},
+    {"name": "Авто-електроніка",          "url": "https://autoconsulting.ua/news.php?catid=11"},
+    {"name": "Ринок запчастин",           "url": "https://autoconsulting.ua/news.php?catid=8"},
+    {"name": "Ринок шин",                 "url": "https://autoconsulting.ua/news.php?catid=30"},
 ]
 
 BASE_URL = "https://autoconsulting.ua"
@@ -96,15 +106,9 @@ def fetch_article_text(article_url):
     return {"text": text, "title": title, "image": image_url}
 
 def normalize_title(title):
-    """
-    Нормалізує заголовок для порівняння — прибирає пунктуацію і зводить до нижнього регістру.
-    Потрібно щоб "Камери: 337 одиниць" і "Камери: 377 одиниць" не вважались однаковими,
-    але "Камери ПДР в Україні" і "камери пдр в україні" — вважались.
-    """
     return re.sub(r'[^\w\s]', '', title.lower()).strip()
 
 def save_url_to_file(url, db_file="parsed_urls.txt"):
-    """Записує URL у файл — щоб після перезапуску Render він не вважався новим."""
     with open(db_file, "a", encoding="utf-8") as f:
         f.write(url + "\n")
 
@@ -120,16 +124,14 @@ def get_new_articles(processed_urls):
         new_links = [l for l in links if l not in processed_urls]
         print(f"   Нових (не опублікованих): {len(new_links)}")
 
-        for url in new_links[:2]:
+        for url in new_links[:1]:
             data = fetch_article_text(url)
             if not data:
                 continue
 
             norm = normalize_title(data['title'])
             if norm in seen_titles:
-                print(f"⏭️ Пропускаємо дубль за заголовком: {data['title'][:60]}")
-                # ✅ ВИПРАВЛЕННЯ: записуємо в пам'ять І у файл
-                # Без запису у файл — після перезапуску Render дубль знову з'явиться
+                print(f"⏭️ Пропускаємо дубль: {data['title'][:60]}")
                 processed_urls.add(url)
                 save_url_to_file(url)
                 continue
