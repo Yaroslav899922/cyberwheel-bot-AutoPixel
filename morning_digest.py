@@ -3,14 +3,10 @@ import os
 from datetime import datetime
 import pytz
 
-# ─────────────────────────────────────────────
-# Ключі беруться з Render → Environment Variables
-# WEATHER_API_KEY — з openweathermap.org
-# CoinGecko більше не потрібен — використовуємо Binance Public API (безкоштовно, без ключа)
-# ─────────────────────────────────────────────
-WEATHER_API_KEY = os.getenv("WEATHER_API_KEY", "")
+WEATHER_API_KEY    = os.getenv("WEATHER_API_KEY", "")
+CMC_API_KEY = os.getenv("CMC_API_KEY", "")
 
-CITY    = "Kremenchuk"
+CITY    = "Kremenchuk,UA"
 CITY_UA = "Кременчук"
 
 def get_weather():
@@ -57,7 +53,6 @@ def get_weather():
 
 
 def get_currency():
-    """НБУ API — безкоштовно, без ключа."""
     try:
         url = "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json"
         r = requests.get(url, timeout=10)
@@ -82,36 +77,34 @@ def get_currency():
 
 
 def get_crypto():
-    """
-    Binance Public API — повністю безкоштовно, без реєстрації, без ключа.
-    Один запит повертає ціну будь-якої пари до USDT.
-    Також окремо беремо зміну за 24 години через ticker/24hr.
-    """
-    coins = {
-        "BTCUSDT": "BTC",
-        "ETHUSDT": "ETH",
-        "BNBUSDT": "BNB",
-    }
-    lines = ["₿ <b>Крипта · Binance</b>"]
-
+    """CoinMarketCap API — безкоштовний план, 10k запитів/місяць."""
+    if not CMC_API_KEY:
+        return "₿ <b>Крипта:</b> ключ CMC_API_KEY не налаштовано на Render"
     try:
-        # Один запит — всі три пари одразу
-        symbols = '["' + '","'.join(coins.keys()) + '"]'
-        url = f"https://api.binance.com/api/v3/ticker/24hr?symbols={symbols}"
-        r = requests.get(url, timeout=10)
-        data = r.json()
+        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+        headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
+        params  = {"symbol": "BTC,ETH,BNB", "convert": "USD"}
 
-        for item in data:
-            symbol = item["symbol"]
-            name   = coins.get(symbol, symbol)
-            price  = float(item["lastPrice"])
-            change = float(item["priceChangePercent"])
+        r = requests.get(url, headers=headers, params=params, timeout=10)
+        d = r.json()
+        coins_data = d.get("data", {})
 
-            arrow = "📈" if change >= 0 else "📉"
-            sign  = "+" if change >= 0 else ""
+        lines = ["₿ <b>Крипта · CoinMarketCap</b>"]
+
+        for symbol in ["BTC", "ETH", "BNB"]:
+            info   = coins_data.get(symbol, {})
+            quote  = info.get("quote", {}).get("USD", {})
+            price  = quote.get("price", 0)
+            change = quote.get("percent_change_24h", 0)
+
+            if not price:
+                lines.append(f"• {symbol}: н/д")
+                continue
+
+            arrow     = "📈" if change >= 0 else "📉"
+            sign      = "+" if change >= 0 else ""
             price_str = f"{price:,.0f}" if price > 1000 else f"{price:,.2f}"
-
-            lines.append(f"{arrow} {name}: <b>${price_str}</b> ({sign}{change:.1f}%)")
+            lines.append(f"{arrow} {symbol}: <b>${price_str}</b> ({sign}{change:.1f}%)")
 
         return "\n".join(lines)
 
@@ -121,13 +114,12 @@ def get_crypto():
 
 
 def build_morning_digest():
-    """Збирає всі три блоки в одне повідомлення."""
     kyiv_tz = pytz.timezone("Europe/Kiev")
     now = datetime.now(kyiv_tz)
 
     days_ua = {
-        0: "Понеділок", 1: "Вівторок",  2: "Середа",
-        3: "Четвер",    4: "П'ятниця",  5: "Субота", 6: "Неділя"
+        0: "понеділок", 1: "вівторок",  2: "середу",
+        3: "четвер",    4: "п'ятницю",  5: "суботу", 6: "неділю"
     }
     day_name = days_ua[now.weekday()]
     date_str = now.strftime("%d.%m.%Y")
@@ -137,8 +129,10 @@ def build_morning_digest():
     crypto   = get_crypto()
 
     message = (
-        f"🌅 <b>РАНКОВИЙ ДАЙДЖЕСТ · {day_name}, {date_str}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"🌅 <b>Добрий ранок!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"Агент Софія вітає вас у {day_name}, {date_str}.\n"
+        f"Ось все що потрібно знати перед початком дня:\n\n"
         f"{weather}\n\n"
         f"{currency}\n\n"
         f"{crypto}\n\n"
@@ -151,5 +145,4 @@ def build_morning_digest():
 
 if __name__ == "__main__":
     print("🧪 Тестую ранковий дайджест...\n")
-    msg = build_morning_digest()
-    print(msg)
+    print(build_morning_digest())
