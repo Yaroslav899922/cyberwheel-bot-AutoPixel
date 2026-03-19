@@ -65,17 +65,20 @@ def process_and_send(data, url, processed_urls):
     else:
         final_msg = raw_summary
 
+    # Вшиваємо посилання на оригінал прямо в текст — без окремої кнопки
+    source_link = f"\n\n<a href='{url}'><b>Читати повністю →</b></a>" if url else ""
+
     social_links = (
         "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
         "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
         "📘 <a href='https://www.facebook.com/skodakremen'>Facebook</a>  |  "
         "🌐 <a href='https://www.avtocenter-kremenchuk.site/'>Наш сайт</a>"
     )
-    final_msg += social_links
+    final_msg += source_link + social_links
 
     success = telegram_bot.send_telegram_message(
         text=final_msg,
-        url=url,
+        url=None,          # url=None — прибираємо зелену кнопку знизу
         image_url=data.get('image')
     )
 
