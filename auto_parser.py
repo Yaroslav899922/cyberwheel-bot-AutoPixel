@@ -80,7 +80,7 @@ def run_auto_scout():
     processed_urls = load_processed_urls()
 
     # ── РАНКОВИЙ ДАЙДЖЕСТ о 8:00 ────────────────────────────────────────────
-    if is_morning:
+    if True:
         print("\n🌅 Відправляю ранковий дайджест...")
         try:
             digest_msg = morning_digest.build_morning_digest()
