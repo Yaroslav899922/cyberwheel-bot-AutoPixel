@@ -8,3 +8,4 @@ Flask==3.0.3
 gunicorn==22.0.0
 python-dotenv
 lxml_html_clean
+beautifulsoup4==4.12.3

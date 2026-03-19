@@ -6,10 +6,10 @@ from datetime import datetime
 import main
 import brain
 import telegram_bot
+import autoconsulting_parser  # ✅ НОВЕ: кастомний парсер для autoconsulting.ua
 
 DB_FILE = "parsed_urls.txt"
 
-# 1. СПИСОК ДЖЕРЕЛ
 def load_sources():
     if not os.path.exists("sources.txt"):
         return ["https://ain.ua/feed/"]
@@ -28,68 +28,101 @@ def save_processed_url(url):
     with open(DB_FILE, "a", encoding="utf-8") as f:
         f.write(url + "\n")
 
+def cleanup_old_urls(max_lines=2000):
+    if not os.path.exists(DB_FILE):
+        return
+    with open(DB_FILE, "r", encoding="utf-8") as f:
+        lines = [l.strip() for l in f if l.strip()]
+    if len(lines) > max_lines:
+        print(f"🧹 Очищення бази: {len(lines)} → {max_lines} записів")
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines[-max_lines:]) + "\n")
+
+def process_and_send(data, url, is_morning, processed_urls):
+    """
+    Спільна функція обробки та відправки для обох типів джерел.
+    Приймає data (text, title, image) та url — і відправляє в Telegram.
+    """
+    raw_summary = brain.summarize_text(data['text'], data['title'], is_morning)
+
+    if "[TITLE]:" in raw_summary:
+        parts = raw_summary.split("[TITLE]:", 1)[1].split("\n", 1)
+        final_msg = f"⚡️ <b>{parts[0].strip().upper()}</b>\n\n{parts[1].strip()}"
+    else:
+        final_msg = raw_summary
+
+    social_links = (
+        "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
+        "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
+        "📘 <a href='https://www.facebook.com/skodakremen'>Facebook</a>  |  "
+        "🌐 <a href='https://www.avtocenter-kremenchuk.site/'>Наш сайт</a>"
+    )
+    final_msg += social_links
+
+    success = telegram_bot.send_telegram_message(
+        text=final_msg,
+        url=url,
+        image_url=data.get('image')
+    )
+
+    if success:
+        save_processed_url(url)
+        processed_urls.add(url)
+        print(f"✅ URL збережено: {url[:60]}...")
+    else:
+        print(f"⚠️ Telegram не отримав повідомлення. URL не збережено — спробуємо наступного разу.")
+
+    time.sleep(10)
+
 def run_auto_scout():
     kyiv_tz = pytz.timezone('Europe/Kiev')
     now = datetime.now(kyiv_tz)
-    is_morning = (now.hour == 8) # Вітаємося тільки в 8:00
-    
+    is_morning = (now.hour == 8)
+
+    cleanup_old_urls()
     processed_urls = load_processed_urls()
-    
+
+    # ── БЛОК 1: RSS-джерела (без змін) ──────────────────────────────────────
     for rss_url in RSS_SOURCES:
-        print(f"\n📡 Перевіряю: {rss_url}")
-        feed = feedparser.parse(rss_url)
-        for entry in feed.entries[:3]:
-            if entry.link not in processed_urls:
-                data = main.fetch_article_data(entry.link)
-                if data and data.get('text'):
-                    print(f"🆕 Обробка статті: {entry.title}")
-                    raw_summary = brain.summarize_text(data['text'], entry.title, is_morning)
-                    
-                    # Обробка заголовка від ШІ
-                    if "[TITLE]:" in raw_summary:
-                        parts = raw_summary.split("[TITLE]:", 1)[1].split("\n", 1)
-                        # Заголовок великими літерами та жирним (HTML)
-                        final_msg = f"⚡️ <b>{parts[0].strip().upper()}</b>\n\n{parts[1].strip()}"
-                    else:
-                        final_msg = raw_summary
+        print(f"\n📡 Перевіряю RSS: {rss_url}")
+        try:
+            feed = feedparser.parse(rss_url)
+        except Exception as e:
+            print(f"❌ Не вдалося завантажити RSS {rss_url}: {type(e).__name__}: {e}")
+            continue
 
-                    # БЛОК СОЦМЕРЕЖ
-                    social_links = (
-                        "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
-                        "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
-                        "📘 <a href='https://www.facebook.com/skodakremen'>Facebook</a>  |  "
-                        "🌐 <a href='https://www.avtocenter-kremenchuk.site/'>Наш сайт</a>"
-                    )
-                    final_msg += social_links
+        new_entries = [e for e in feed.entries if e.link not in processed_urls]
 
-                    # Відправка у Telegram (з фото та кнопкою)
-                    telegram_bot.send_telegram_message(
-                        text=final_msg, 
-                        url=entry.link,
-                        image_url=data.get('image') 
-                    )
-                    
-                    save_processed_url(entry.link)
-                    processed_urls.add(entry.link)
-                    time.sleep(5)
-            else:
-                print(f"✅ Вже було: {entry.title[:40]}...")
+        for entry in new_entries[:3]:
+            data = main.fetch_article_data(entry.link)
+            if data and data.get('text'):
+                print(f"🆕 RSS стаття: {entry.title}")
+                process_and_send(data, entry.link, is_morning, processed_urls)
+
+    # ── БЛОК 2: AutoConsulting (новий HTML-парсер) ───────────────────────────
+    print(f"\n{'─'*50}")
+    print(f"🚗 Перевіряю AutoConsulting...")
+    try:
+        ac_articles = autoconsulting_parser.get_new_articles(processed_urls)
+        for article in ac_articles:
+            print(f"🆕 AutoConsulting стаття: {article['data']['title'][:60]}")
+            process_and_send(article['data'], article['url'], is_morning, processed_urls)
+    except Exception as e:
+        print(f"❌ Помилка AutoConsulting парсера: {type(e).__name__}: {e}")
 
 if __name__ == "__main__":
     import web_server
-    
+
     print("🌐 Запускаю фоновий веб-сервер...")
     web_server.keep_alive()
-    
+
     print("🚀 Автоматичний планувальник CyberWheel стартував!")
-    
+
     while True:
         try:
-            # Одразу запускаємо перевірку при старті
             run_auto_scout()
         except Exception as e:
-            print(f"❌ Критична помилка у циклі: {e}")
-            
-        # Після перевірки засинаємо на 60 хвилин (3600 секунд)
+            print(f"❌ Критична помилка у циклі: {type(e).__name__}: {e}")
+
         print("😴 Патрулювання завершено. Наступна перевірка через 60 хвилин...")
         time.sleep(3600)
