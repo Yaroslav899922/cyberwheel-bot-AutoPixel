@@ -47,7 +47,14 @@ def summarize_text(article_text, original_title, is_morning=False):
     ТЕКСТ: {article_text}
     """
     
-    models =['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-3.1-flash-lite-preview']
+    # ХІРУРГІЧНА ПРАВКА: Економна ієрархія моделей. 
+    # Спочатку найдешевша, потім резервна легка, потім стабільна.
+    models =[
+        'gemini-flash-lite-latest', 
+        'gemini-3.1-flash-lite-preview', 
+        'gemini-flash-latest'
+    ]
+    
     for m in models:
         try:
             response = client.models.generate_content(model=m, contents=prompt)
