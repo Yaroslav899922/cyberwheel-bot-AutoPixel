@@ -9,3 +9,4 @@ gunicorn==22.0.0
 python-dotenv
 lxml_html_clean
 beautifulsoup4==4.12.3
+schedule==1.2.2
