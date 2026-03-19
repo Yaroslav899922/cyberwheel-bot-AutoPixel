@@ -6,7 +6,8 @@ from datetime import datetime
 import main
 import brain
 import telegram_bot
-import autoconsulting_parser  # ✅ НОВЕ: кастомний парсер для autoconsulting.ua
+import autoconsulting_parser
+import morning_digest  # ✅ НОВЕ: ранковий дайджест
 
 DB_FILE = "parsed_urls.txt"
 
@@ -39,10 +40,6 @@ def cleanup_old_urls(max_lines=2000):
             f.write("\n".join(lines[-max_lines:]) + "\n")
 
 def process_and_send(data, url, is_morning, processed_urls):
-    """
-    Спільна функція обробки та відправки для обох типів джерел.
-    Приймає data (text, title, image) та url — і відправляє в Telegram.
-    """
     raw_summary = brain.summarize_text(data['text'], data['title'], is_morning)
 
     if "[TITLE]:" in raw_summary:
@@ -82,7 +79,18 @@ def run_auto_scout():
     cleanup_old_urls()
     processed_urls = load_processed_urls()
 
-    # ── БЛОК 1: RSS-джерела (без змін) ──────────────────────────────────────
+    # ── РАНКОВИЙ ДАЙДЖЕСТ о 8:00 ────────────────────────────────────────────
+    if is_morning:
+        print("\n🌅 Відправляю ранковий дайджест...")
+        try:
+            digest_msg = morning_digest.build_morning_digest()
+            # Дайджест без кнопки "Читати оригінал" і без фото — чистий текст
+            telegram_bot.send_telegram_message(text=digest_msg)
+            print("✅ Ранковий дайджест відправлено!")
+        except Exception as e:
+            print(f"❌ Помилка дайджесту: {type(e).__name__}: {e}")
+
+    # ── БЛОК 1: RSS-джерела ──────────────────────────────────────────────────
     for rss_url in RSS_SOURCES:
         print(f"\n📡 Перевіряю RSS: {rss_url}")
         try:
@@ -99,7 +107,7 @@ def run_auto_scout():
                 print(f"🆕 RSS стаття: {entry.title}")
                 process_and_send(data, entry.link, is_morning, processed_urls)
 
-    # ── БЛОК 2: AutoConsulting (новий HTML-парсер) ───────────────────────────
+    # ── БЛОК 2: AutoConsulting ───────────────────────────────────────────────
     print(f"\n{'─'*50}")
     print(f"🚗 Перевіряю AutoConsulting...")
     try:
