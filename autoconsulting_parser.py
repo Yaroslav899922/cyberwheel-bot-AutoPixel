@@ -103,9 +103,13 @@ def normalize_title(title):
     """
     return re.sub(r'[^\w\s]', '', title.lower()).strip()
 
+def save_url_to_file(url, db_file="parsed_urls.txt"):
+    """Записує URL у файл — щоб після перезапуску Render він не вважався новим."""
+    with open(db_file, "a", encoding="utf-8") as f:
+        f.write(url + "\n")
+
 def get_new_articles(processed_urls):
     new_articles = []
-    # ✅ ДЕДУПЛІКАЦІЯ: зберігаємо заголовки які вже додали в цьому циклі
     seen_titles = set()
 
     for section in SECTIONS:
@@ -121,12 +125,13 @@ def get_new_articles(processed_urls):
             if not data:
                 continue
 
-            # ✅ Перевіряємо чи не публікували вже статтю з таким заголовком у цьому циклі
             norm = normalize_title(data['title'])
             if norm in seen_titles:
                 print(f"⏭️ Пропускаємо дубль за заголовком: {data['title'][:60]}")
-                # Все одно записуємо URL у processed щоб більше не перевіряти
+                # ✅ ВИПРАВЛЕННЯ: записуємо в пам'ять І у файл
+                # Без запису у файл — після перезапуску Render дубль знову з'явиться
                 processed_urls.add(url)
+                save_url_to_file(url)
                 continue
 
             seen_titles.add(norm)
