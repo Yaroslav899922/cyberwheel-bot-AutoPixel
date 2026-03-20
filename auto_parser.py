@@ -155,11 +155,16 @@ def run_news_scout():
         ]
         print(f"   Сьогоднішніх нових: {len(new_entries)}")
 
-        for entry in new_entries[:2]:
+        for entry in new_entries[:5]:
             data = main.fetch_article_data(entry.link)
             if data and data.get('text'):
                 print(f"🆕 RSS: {entry.title[:60]}")
                 process_and_send(data, entry.link, processed_urls)
+            else:
+                # ✅ Битий URL — записуємо щоб не перевіряти знову
+                print(f"⏭️ Не вдалось отримати текст — пропускаємо: {entry.link[:60]}")
+                save_processed_url(entry.link)
+                processed_urls.add(entry.link)
 
     # ── БЛОК 2: AutoConsulting ────────────────────────────────
     print(f"\n{'─'*50}")
@@ -184,8 +189,9 @@ if __name__ == "__main__":
     schedule.every().day.at("08:00").do(send_morning_digest)
     # 08:30 UTC = 10:30 Київ — перші новини після дайджесту
     schedule.every().day.at("08:30").do(run_news_scout)
-    # Новини щогодини
-    schedule.every().hour.at(":00").do(run_news_scout)
+    # ✅ Новини кожні 60 хвилин після попереднього запуску
+    # (не чекає круглої години — запускає через 60 хв після старту)
+    schedule.every(60).minutes.do(run_news_scout)
 
     print("🔍 Перший запуск парсингу при старті...")
     run_news_scout()
