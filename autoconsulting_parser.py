@@ -110,8 +110,29 @@ def fetch_article_text(article_url, today):
                 image_url = src if src.startswith("http") else BASE_URL + "/" + src.lstrip("/")
                 break
 
+    # Перевірка стоп-слів — відсіюємо вантажівки, автобуси тощо
+    if not is_title_relevant(title):
+        return None
+
     print(f"✅ [AutoConsulting] Свіжа ({article_date}): {title[:60]}...")
     return {"text": text, "title": title, "image": image_url}
+
+# Стоп-слова: якщо є в заголовку — стаття не для нашого каналу
+STOP_WORDS = [
+    "вантажівк", "тягач", "напівпричіп", "автобус", "тролейбус",
+    "мотоцикл", "скутер", "квадроцикл", "трактор", "комбайн",
+    "причіп", "фура", "volvo fh", "man tg", "daf xf", "scania",
+    "iveco stralis", "mercedes actros",
+]
+
+def is_title_relevant(title):
+    """Повертає False якщо заголовок містить стоп-слова."""
+    title_lower = title.lower()
+    for word in STOP_WORDS:
+        if word in title_lower:
+            print(f"🚫 Стоп-слово '{word}' знайдено: {title[:60]}")
+            return False
+    return True
 
 def normalize_title(title):
     return re.sub(r'[^\w\s]', '', title.lower()).strip()
@@ -135,7 +156,8 @@ def get_new_articles(processed_urls, max_total=3):
         print(f"📡 [{section['name']}]", end=" ")
         links = get_article_links(section["url"])
 
-        for url in links:
+        # Перевіряємо тільки перші 5 посилань з розділу — решта архів
+        for url in links[:5]:
             if len(new_articles) >= max_total:
                 break
             if url in processed_urls or url in seen_urls:
