@@ -56,6 +56,23 @@ def mark_digest_sent():
 def get_today_kyiv():
     return datetime.now(KYIV_TZ).strftime("%Y-%m-%d")
 
+# Стоп-слова для RSS — нерелевантний контент
+RSS_STOP_WORDS = [
+    "мотоцикл", "мото", "скутер", "квадроцикл",
+    "вантажівк", "тягач", "автобус", "тролейбус",
+    "трактор", "комбайн", "причіп", "фура",
+    "motorcycle", "motorbike", "scooter", "truck", "bus",
+]
+
+def is_rss_title_relevant(title):
+    """Фільтр нерелевантних RSS статей по заголовку."""
+    title_lower = title.lower()
+    for word in RSS_STOP_WORDS:
+        if word in title_lower:
+            print(f"🚫 RSS стоп-слово '{word}': {title[:60]}")
+            return False
+    return True
+
 def is_entry_today(entry):
     """
     ✅ ВИПРАВЛЕНО: правильна обробка таймзон з RSS.
@@ -141,9 +158,24 @@ def run_news_scout():
 
     # ── БЛОК 1: RSS ──────────────────────────────────────────
     for rss_url in RSS_SOURCES:
+        # ✅ Рандомна пауза 5-15 секунд між джерелами
+        # Імітує природню поведінку людини — не бота
+        pause = random.uniform(5, 15)
+        print(f"⏳ Пауза {pause:.1f}с...")
+        time.sleep(pause)
+
         print(f"\n📡 RSS: {rss_url}")
         try:
-            feed = feedparser.parse(rss_url)
+            # Передаємо заголовки і в feedparser для обходу блокувань
+            feed = feedparser.parse(
+                rss_url,
+                agent=random.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                    "Feedly/1.0 (+http://www.feedly.com/fetcher.html)",
+                    "NewsBlur Feed Fetcher - 250000 subscribers",
+                ])
+            )
             print(f"   Всього в стрічці: {len(feed.entries)}")
         except Exception as e:
             print(f"❌ Помилка RSS {rss_url}: {type(e).__name__}: {e}")
@@ -151,7 +183,9 @@ def run_news_scout():
 
         new_entries = [
             e for e in feed.entries
-            if e.link not in processed_urls and is_entry_today(e)
+            if e.link not in processed_urls
+            and is_entry_today(e)
+            and is_rss_title_relevant(getattr(e, 'title', ''))
         ]
         print(f"   Сьогоднішніх нових: {len(new_entries)}")
 
