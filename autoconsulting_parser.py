@@ -156,8 +156,8 @@ def get_new_articles(processed_urls, max_total=3):
         print(f"📡 [{section['name']}]", end=" ")
         links = get_article_links(section["url"])
 
-        # Перевіряємо тільки перші 5 посилань з розділу — решта архів
-        for url in links[:5]:
+        # ✅ ХІРУРГІЧНА ПРАВКА: Перевіряємо перші 25 посилань, щоб оминути старі "Популярні" статті
+        for url in links[:25]:
             if len(new_articles) >= max_total:
                 break
             if url in processed_urls or url in seen_urls:
