@@ -56,10 +56,6 @@ def get_today_kyiv():
     return datetime.now(KYIV_TZ).strftime("%Y-%m-%d")
 
 def is_entry_today(entry):
-    """
-    Перевіряє чи RSS стаття опублікована сьогодні за Києвом.
-    Якщо feedparser не дав дату — дозволяємо (деякі RSS не дають дату).
-    """
     today     = get_today_kyiv()
     published = getattr(entry, "published_parsed", None)
     if not published:
@@ -80,7 +76,7 @@ def process_and_send(data, url, processed_urls):
     else:
         final_msg = raw_summary
 
-    source_link = f"\n\n<a href='{url}'><b>Читати повністю →</b></a>" if url else ""
+    source_link  = f"\n\n<a href='{url}'><b>Читати повністю →</b></a>" if url else ""
     social_links = (
         "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
         "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
@@ -107,7 +103,9 @@ def process_and_send(data, url, processed_urls):
 def send_morning_digest():
     """
     Дайджест о 10:00 Київ (08:00 UTC).
-    Захист від дублів через last_digest_date.txt.
+    ✅ ВИПРАВЛЕНО: більше немає time.sleep(1800) тут.
+    Пауза реалізована через окремий розклад о 10:30 UTC (12:30 Київ).
+    Це вирішує конфлікт schedule + time.sleep.
     """
     if was_digest_sent_today():
         print("⏭️ Дайджест сьогодні вже відправлявся.")
@@ -119,16 +117,9 @@ def send_morning_digest():
         success    = telegram_bot.send_telegram_message(text=digest_msg)
         if success:
             mark_digest_sent()
-            print("✅ Дайджест відправлено!")
-        else:
-            print("❌ Дайджест не відправлено.")
+            print("✅ Дайджест відправлено! Новини підуть о 10:30 UTC (12:30 Київ)")
     except Exception as e:
         print(f"❌ Помилка дайджесту: {type(e).__name__}: {e}")
-
-    # Пауза 30 хвилин після дайджесту — потім одразу новини
-    print("⏸️ Пауза 30 хв перед новинами...")
-    time.sleep(1800)
-    run_news_scout()
 
 def run_news_scout():
     today          = get_today_kyiv()
@@ -177,15 +168,21 @@ if __name__ == "__main__":
 
     print("🚀 CyberWheel стартував!")
 
+    # ── РОЗКЛАД (всі часи UTC) ────────────────────────────────
     # 08:00 UTC = 10:00 Київ — дайджест
     schedule.every().day.at("08:00").do(send_morning_digest)
-    # Новини щогодини
-    schedule.every().hour.do(run_news_scout)
+
+    # ✅ ВИПРАВЛЕННЯ: пауза після дайджесту реалізована через розклад
+    # 08:30 UTC = 10:30 Київ — перші новини після дайджесту
+    schedule.every().day.at("08:30").do(run_news_scout)
+
+    # Новини щогодини (окрім 08:30 — там вже є окремий запуск)
+    schedule.every().hour.at(":00").do(run_news_scout)
 
     print("🔍 Перший запуск парсингу при старті...")
     run_news_scout()
 
-    print("📅 Дайджест о 10:00 Київ, новини щогодини.")
+    print("📅 Дайджест о 10:00 Київ, новини о 10:30 і щогодини.")
 
     while True:
         schedule.run_pending()

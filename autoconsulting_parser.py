@@ -4,13 +4,12 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import pytz
 
+# ✅ Прибрали: Ринок вантажівок, Ринок автобусів — не релевантно для легкових авто
 SECTIONS = [
     {"name": "Ринок автомобілів",         "url": "https://autoconsulting.ua/news.php?catid=16"},
     {"name": "Новини виробників",          "url": "https://autoconsulting.ua/news.php?catid=4"},
     {"name": "Електромобілі",              "url": "https://autoconsulting.ua/news.php?catid=39"},
     {"name": "Статистика автопродажів",    "url": "https://autoconsulting.ua/news.php?catid=41"},
-    {"name": "Ринок автобусів",            "url": "https://autoconsulting.ua/news.php?catid=5"},
-    {"name": "Ринок вантажівок",           "url": "https://autoconsulting.ua/news.php?catid=9"},
     {"name": "Виробництво автомобілів",    "url": "https://autoconsulting.ua/news.php?catid=17"},
     {"name": "Законодавство",              "url": "https://autoconsulting.ua/news.php?catid=13"},
     {"name": "Автобізнес LIFE",            "url": "https://autoconsulting.ua/news.php?catid=38"},
@@ -32,7 +31,6 @@ HEADERS = {
 }
 
 def get_today_kyiv():
-    """Сьогоднішня дата за Києвом: 'YYYY-MM-DD'."""
     return datetime.now(KYIV_TZ).strftime("%Y-%m-%d")
 
 def fetch_page(url):
@@ -60,20 +58,11 @@ def get_article_links(section_url):
     return links
 
 def parse_article_date(soup):
-    """
-    Витягує дату публікації зі сторінки статті.
-    Autoconsulting зберігає її у форматі: '2026-03-20 08:14:27'
-    Повертає 'YYYY-MM-DD' або None.
-    """
-    text = soup.get_text(" ")
+    text  = soup.get_text(" ")
     match = re.search(r'(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}', text)
     return match.group(1) if match else None
 
 def fetch_article_text(article_url, today):
-    """
-    Завантажує статтю і повертає дані ТІЛЬКИ якщо опублікована сьогодні.
-    Якщо дата інша — повертає None.
-    """
     html = fetch_page(article_url)
     if not html:
         return None
@@ -89,14 +78,12 @@ def fetch_article_text(article_url, today):
         print(f"⏭️ [AutoConsulting] Стара ({article_date} ≠ {today}) — пропускаємо")
         return None
 
-    # Заголовок
     title = ""
     title_tag = soup.find("title")
     if title_tag:
-        raw = title_tag.get_text(strip=True)
+        raw   = title_tag.get_text(strip=True)
         title = raw.split(":")[0].strip() if ":" in raw else raw
 
-    # Текст — найбільший <td>
     best_td, best_len = None, 0
     for td in soup.find_all("td"):
         t = td.get_text(separator=" ", strip=True)
@@ -115,7 +102,6 @@ def fetch_article_text(article_url, today):
         print(f"⚠️ [AutoConsulting] Текст не знайдено: {article_url}")
         return None
 
-    # Зображення
     image_url = None
     for img in soup.find_all("img", src=True):
         src = img["src"]
@@ -135,11 +121,6 @@ def save_url_to_file(url, db_file="parsed_urls.txt"):
         f.write(url + "\n")
 
 def get_new_articles(processed_urls, max_total=3):
-    """
-    Повертає статті ТІЛЬКИ за сьогоднішню дату (Київ).
-    Якщо сьогоднішніх нема — повертає порожній список.
-    Максимум max_total постів з усіх 14 розділів разом.
-    """
     today        = get_today_kyiv()
     new_articles = []
     seen_titles  = set()
@@ -164,7 +145,6 @@ def get_new_articles(processed_urls, max_total=3):
             data = fetch_article_text(url, today)
 
             if data is None:
-                # Стара або недоступна — записуємо щоб не перевіряти знову
                 processed_urls.add(url)
                 save_url_to_file(url)
                 continue
@@ -191,4 +171,3 @@ if __name__ == "__main__":
     for r in results:
         print(f"\n🔗 {r['url']}")
         print(f"📰 {r['data']['title']}")
-        print(f"📝 {r['data']['text'][:150]}")
