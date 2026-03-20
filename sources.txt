@@ -5,4 +5,7 @@ https://electrek.co/feed/
 https://itc.ua/ua/avto-ua/feed/
 https://ukrautoprom.com.ua/feed/
 https://www.motor1.com/rss/news/all/
+https://www.motor1.com/rss/reviews/all/
+https://www.motor1.com/rss/features/all/
+https://www.motor1.com/rss/category/rumors/
 https://news.infocar.ua/rss/
