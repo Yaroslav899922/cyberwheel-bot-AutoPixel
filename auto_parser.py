@@ -154,23 +154,35 @@ def send_morning_digest():
     except Exception as e:
         print(f"❌ Помилка дайджесту: {type(e).__name__}: {e}")
 
-# ✅ НОВА ФУНКЦІЯ: Вечірнє побажання від Агента Софії
+# ✅ ОНОВЛЕНА ФУНКЦІЯ: Ідеальний дизайн для вечірнього побажання
 def send_evening_message():
     print("\n🌙 Відправляю вечірнє побажання...")
-    prompt = """Ти — Агент Софія, експерт та аналітик автоканалу Skoda_Kremen_News. 
-    Напиши коротке, затишне побажання на добраніч для підписників. 
-    Скажи, що на сьогодні потік автоновин завершено, побажай тихої і спокійної ночі. 
-    Додай нативну, дуже легку згадку про Škoda (наприклад, що сон має бути таким же комфортним і безтурботним, як подорож у салоні Škoda). 
-    Завтра вранці ти знову повернешся з новими автомобільними інсайдами.
-    Використовуй емодзі. Текст має бути коротким: максимум 3-4 речення.
+    prompt = """Ти — Агент Софія, аналітик автоканалу Skoda_Kremen_News. 
+    Напиши коротке побажання на добраніч (2-3 речення).
+    Повідом, що на сьогодні новини закінчилися. 
+    Побажай комфортного відпочинку, порівнявши його з комфортом автомобілів Škoda.
+    НЕ використовуй жодного форматування (ніяких зірочок, жирного шрифту або курсиву) у відповіді. Тільки чистий текст та емодзі.
     """
     try:
         response = brain.client.models.generate_content(
             model='gemini-flash-lite-latest',
             contents=prompt
         )
-        clean_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', response.text.strip())
-        final_msg = f"🌙 <b>НА ДОБРАНІЧ</b>\n\n{clean_text}"
+        ai_text = response.text.strip()
+        # Про всяк випадок чистимо від можливих зірочок, якщо ШІ їх додасть
+        ai_text = re.sub(r'[*_`]', '', ai_text)
+        
+        # Формуємо фірмовий стиль повідомлення
+        final_msg = f"🌙 <b>НА ДОБРАНІЧ</b>\n\n{ai_text}\n\n✨ <i>Ваш Агент Софія</i>"
+        
+        social_links = (
+            "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
+            "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
+            "📘 <a href='https://www.facebook.com/skodakremen'>Facebook</a>  |  "
+            "🌐 <a href='https://www.avtocenter-kremenchuk.site/'>Наш сайт</a>"
+        )
+        final_msg += social_links
+
         telegram_bot.send_telegram_message(text=final_msg)
         print("✅ Вечірнє повідомлення відправлено!")
     except Exception as e:
