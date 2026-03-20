@@ -1,7 +1,7 @@
 import requests
 import re
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 # ✅ Прибрали: Ринок вантажівок, Ринок автобусів — не релевантно для легкових авто
@@ -30,8 +30,13 @@ HEADERS = {
     "Accept-Language": "uk,ru;q=0.9,en;q=0.8",
 }
 
-def get_today_kyiv():
-    return datetime.now(KYIV_TZ).strftime("%Y-%m-%d")
+# ✅ НОВЕ: Беремо не тільки сьогодні, а й вчора
+def get_recent_dates_kyiv():
+    now = datetime.now(KYIV_TZ)
+    return [
+        now.strftime("%Y-%m-%d"),
+        (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    ]
 
 def fetch_page(url):
     try:
@@ -78,7 +83,7 @@ def parse_article_date(soup):
     match = re.search(r'(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}', text)
     return match.group(1) if match else None
 
-def fetch_article_text(article_url, today):
+def fetch_article_text(article_url, allowed_dates):
     html = fetch_page(article_url)
     if not html:
         return None
@@ -90,8 +95,9 @@ def fetch_article_text(article_url, today):
         print(f"⚠️ [AutoConsulting] Дата не знайдена — пропускаємо: {article_url}")
         return None
 
-    if article_date != today:
-        print(f"⏭️ [AutoConsulting] Стара ({article_date} ≠ {today}) — пропускаємо")
+    # ✅ Перевіряємо, чи дата входить у вікно (сьогодні або вчора)
+    if article_date not in allowed_dates:
+        print(f"⏭️ [AutoConsulting] Стара ({article_date} не сьогодні і не вчора) — пропускаємо")
         return None
 
     title = ""
@@ -158,12 +164,13 @@ def save_url_to_file(url, db_file="parsed_urls.txt"):
         f.write(url + "\n")
 
 def get_new_articles(processed_urls, max_total=3):
-    today        = get_today_kyiv()
-    new_articles = []
-    seen_titles  = set()
-    seen_urls    = set()
+    allowed_dates = get_recent_dates_kyiv()
+    today_str     = allowed_dates[0] # Тільки для виведення в консоль
+    new_articles  = []
+    seen_titles   = set()
+    seen_urls     = set()
 
-    print(f"\n📅 AutoConsulting: шукаємо статті за {today}")
+    print(f"\n📅 AutoConsulting: шукаємо статті за сьогодні та вчора ({today_str})")
 
     for section in SECTIONS:
         if len(new_articles) >= max_total:
@@ -180,7 +187,7 @@ def get_new_articles(processed_urls, max_total=3):
                 continue
 
             seen_urls.add(url)
-            data = fetch_article_text(url, today)
+            data = fetch_article_text(url, allowed_dates)
 
             if data is None:
                 processed_urls.add(url)
@@ -198,14 +205,14 @@ def get_new_articles(processed_urls, max_total=3):
             new_articles.append({"url": url, "data": data})
 
     if not new_articles:
-        print(f"ℹ️ AutoConsulting: свіжих статей за {today} не знайдено.")
+        print(f"ℹ️ AutoConsulting: свіжих статей за {today_str} (та вчора) не знайдено.")
 
     return new_articles
 
 if __name__ == "__main__":
     print("🧪 Тестую autoconsulting.ua...\n")
     results = get_new_articles(set())
-    print(f"\n📊 Знайдено сьогоднішніх статей: {len(results)}")
+    print(f"\n📊 Знайдено свіжих статей: {len(results)}")
     for r in results:
         print(f"\n🔗 {r['url']}")
         print(f"📰 {r['data']['title']}")
