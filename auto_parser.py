@@ -3,6 +3,7 @@ import os
 import time
 import pytz
 import schedule
+import email.utils
 from datetime import datetime, date
 import main
 import brain
@@ -56,10 +57,26 @@ def get_today_kyiv():
     return datetime.now(KYIV_TZ).strftime("%Y-%m-%d")
 
 def is_entry_today(entry):
-    today     = get_today_kyiv()
+    """
+    ✅ ВИПРАВЛЕНО: правильна обробка таймзон з RSS.
+    Підтримує +0200, -0400, UTC та інші формати.
+    """
+    today = get_today_kyiv()
+
+    # Спочатку пробуємо через рядок published — найточніший метод
+    published_str = getattr(entry, "published", "")
+    if published_str:
+        try:
+            dt = email.utils.parsedate_to_datetime(published_str)
+            entry_date = dt.astimezone(KYIV_TZ).strftime("%Y-%m-%d")
+            return entry_date == today
+        except Exception:
+            pass
+
+    # Запасний — через published_parsed (feedparser конвертує в UTC)
     published = getattr(entry, "published_parsed", None)
     if not published:
-        return True
+        return True  # якщо дати нема — пропускаємо (дозволяємо)
     try:
         entry_dt   = datetime(*published[:6], tzinfo=pytz.utc)
         entry_date = entry_dt.astimezone(KYIV_TZ).strftime("%Y-%m-%d")
@@ -104,7 +121,6 @@ def send_morning_digest():
     if was_digest_sent_today():
         print("⏭️ Дайджест сьогодні вже відправлявся.")
         return
-
     print("\n🌅 Відправляю ранковий дайджест...")
     try:
         digest_msg = morning_digest.build_morning_digest()
@@ -121,9 +137,9 @@ def run_news_scout():
     cleanup_old_urls()
 
     print(f"\n🔍 Парсинг новин за {today}")
+    print(f"📋 RSS джерел: {len(RSS_SOURCES)}")
 
     # ── БЛОК 1: RSS ──────────────────────────────────────────
-    print(f"📋 RSS джерел: {len(RSS_SOURCES)}")
     for rss_url in RSS_SOURCES:
         print(f"\n📡 RSS: {rss_url}")
         try:
