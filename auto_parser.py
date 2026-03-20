@@ -6,7 +6,7 @@ import schedule
 import email.utils
 import random
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import main
 import brain
 import telegram_bot
@@ -75,31 +75,35 @@ def is_rss_title_relevant(title):
             return False
     return True
 
-def is_entry_today(entry):
+def is_entry_recent(entry):
     """
-    ✅ ВИПРАВЛЕНО: правильна обробка таймзон з RSS.
-    Підтримує +0200, -0400, UTC та інші формати.
+    ✅ ВИПРАВЛЕНО: Дозволяє статті за сьогодні та вчора.
+    Так бот зранку підтягне ті новини, які вийшли пізно вночі.
     """
-    today = get_today_kyiv()
+    now = datetime.now(KYIV_TZ)
+    allowed_dates = [
+        now.strftime("%Y-%m-%d"), 
+        (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    ]
 
-    # Спочатку пробуємо через рядок published — найточніший метод
+    # Спочатку пробуємо через рядок published
     published_str = getattr(entry, "published", "")
     if published_str:
         try:
             dt = email.utils.parsedate_to_datetime(published_str)
             entry_date = dt.astimezone(KYIV_TZ).strftime("%Y-%m-%d")
-            return entry_date == today
+            return entry_date in allowed_dates
         except Exception:
             pass
 
-    # Запасний — через published_parsed (feedparser конвертує в UTC)
+    # Запасний — через published_parsed
     published = getattr(entry, "published_parsed", None)
     if not published:
         return True  # якщо дати нема — пропускаємо (дозволяємо)
     try:
         entry_dt   = datetime(*published[:6], tzinfo=pytz.utc)
         entry_date = entry_dt.astimezone(KYIV_TZ).strftime("%Y-%m-%d")
-        return entry_date == today
+        return entry_date in allowed_dates
     except Exception:
         return True
 
@@ -150,25 +154,50 @@ def send_morning_digest():
     except Exception as e:
         print(f"❌ Помилка дайджесту: {type(e).__name__}: {e}")
 
+# ✅ НОВА ФУНКЦІЯ: Вечірнє побажання від Агента Софії
+def send_evening_message():
+    print("\n🌙 Відправляю вечірнє побажання...")
+    prompt = """Ти — Агент Софія, експерт та аналітик автоканалу Skoda_Kremen_News. 
+    Напиши коротке, затишне побажання на добраніч для підписників. 
+    Скажи, що на сьогодні потік автоновин завершено, побажай тихої і спокійної ночі. 
+    Додай нативну, дуже легку згадку про Škoda (наприклад, що сон має бути таким же комфортним і безтурботним, як подорож у салоні Škoda). 
+    Завтра вранці ти знову повернешся з новими автомобільними інсайдами.
+    Використовуй емодзі. Текст має бути коротким: максимум 3-4 речення.
+    """
+    try:
+        response = brain.client.models.generate_content(
+            model='gemini-flash-lite-latest',
+            contents=prompt
+        )
+        clean_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', response.text.strip())
+        final_msg = f"🌙 <b>НА ДОБРАНІЧ</b>\n\n{clean_text}"
+        telegram_bot.send_telegram_message(text=final_msg)
+        print("✅ Вечірнє повідомлення відправлено!")
+    except Exception as e:
+        print(f"❌ Помилка вечірнього повідомлення: {e}")
+
 def run_news_scout():
+    # 🌙 ЗАХИСТ ВІД НІЧНОГО ПАРСИНГУ
+    current_hour = datetime.now(KYIV_TZ).hour
+    if current_hour >= 22 or current_hour < 10:
+        print(f"😴 Нічний режим ({current_hour}:00). Парсинг зупинено. Бот відпочиває до 10:00 ранку.")
+        return
+
     today          = get_today_kyiv()
     processed_urls = load_processed_urls()
     cleanup_old_urls()
 
-    print(f"\n🔍 Парсинг новин за {today}")
+    print(f"\n🔍 Парсинг новин за {today} (включаючи вчорашні нічні)")
     print(f"📋 RSS джерел: {len(RSS_SOURCES)}")
 
     # ── БЛОК 1: RSS ──────────────────────────────────────────
     for rss_url in RSS_SOURCES:
-        # ✅ Рандомна пауза 5-15 секунд між джерелами
-        # Імітує природню поведінку людини — не бота
         pause = random.uniform(5, 15)
         print(f"⏳ Пауза {pause:.1f}с...")
         time.sleep(pause)
 
         print(f"\n📡 RSS: {rss_url}")
         try:
-            # Передаємо заголовки і в feedparser для обходу блокувань
             feed = feedparser.parse(
                 rss_url,
                 agent=random.choice([
@@ -183,13 +212,14 @@ def run_news_scout():
             print(f"❌ Помилка RSS {rss_url}: {type(e).__name__}: {e}")
             continue
 
+        # ✅ Використовуємо is_entry_recent замість is_entry_today
         new_entries = [
             e for e in feed.entries
             if e.link not in processed_urls
-            and is_entry_today(e)
+            and is_entry_recent(e)
             and is_rss_title_relevant(getattr(e, 'title', ''))
         ]
-        print(f"   Сьогоднішніх нових: {len(new_entries)}")
+        print(f"   Нових (за 2 дні): {len(new_entries)}")
 
         for entry in new_entries[:5]:
             data = main.fetch_article_data(entry.link)
@@ -199,19 +229,33 @@ def run_news_scout():
                 summary_html = getattr(entry, "summary", "") or getattr(entry, "description", "")
                 clean_text = re.sub(r'<[^>]+>', ' ', summary_html).strip()
                 
-                if len(clean_text) > 50:
+                if len(clean_text) > 30:
                     print(f"⚠️ Текст закрито захистом. Беремо опис з RSS: {entry.link[:60]}")
+                    
+                    # 🖼️ Шукаємо картинку всередині RSS-стрічки
+                    rss_image = None
+                    if hasattr(entry, 'media_content') and entry.media_content:
+                        rss_image = entry.media_content[0].get('url')
+                    elif hasattr(entry, 'enclosures') and entry.enclosures:
+                        for enc in entry.enclosures:
+                            if enc.get('type', '').startswith('image/'):
+                                rss_image = enc.get('href')
+                                break
+                    if not rss_image and summary_html:
+                        img_match = re.search(r'<img[^>]+src="([^">]+)"', summary_html)
+                        if img_match:
+                            rss_image = img_match.group(1)
+
                     data = {
                         "text": clean_text,
                         "title": entry.title,
-                        "image": None
+                        "image": rss_image
                     }
 
             if data and data.get('text'):
                 print(f"🆕 RSS: {entry.title[:60]}")
                 process_and_send(data, entry.link, processed_urls)
             else:
-                # ✅ Якщо текст так і не знайдено — записуємо щоб не перевіряти знову
                 print(f"⏭️ Не вдалось отримати текст взагалі — пропускаємо: {entry.link[:60]}")
                 save_processed_url(entry.link)
                 processed_urls.add(entry.link)
@@ -237,15 +281,20 @@ if __name__ == "__main__":
 
     # 08:00 UTC = 10:00 Київ — дайджест
     schedule.every().day.at("08:00").do(send_morning_digest)
+    
     # 08:30 UTC = 10:30 Київ — перші новини після дайджесту
     schedule.every().day.at("08:30").do(run_news_scout)
-    # ✅ Новини кожні 60 хвилин після попереднього запуску
+    
+    # 20:00 UTC = 22:00 Київ — Вечірнє побажання
+    schedule.every().day.at("20:00").do(send_evening_message)
+    
+    # Новини щогодини (нічний фільтр заблокує парсинг з 22:00 до 10:00)
     schedule.every(60).minutes.do(run_news_scout)
 
     print("🔍 Перший запуск парсингу при старті...")
     run_news_scout()
 
-    print("📅 Дайджест о 10:00 Київ, новини о 10:30 і щогодини.")
+    print("📅 Дайджест о 10:00, новини щогодини, вечірнє побажання о 22:00.")
 
     while True:
         schedule.run_pending()
