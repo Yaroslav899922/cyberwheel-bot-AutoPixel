@@ -4,6 +4,8 @@ import time
 import pytz
 import schedule
 import email.utils
+import random
+import re
 from datetime import datetime, date
 import main
 import brain
@@ -191,12 +193,26 @@ def run_news_scout():
 
         for entry in new_entries[:5]:
             data = main.fetch_article_data(entry.link)
+            
+            # 💡 ГЛОБАЛЬНЕ РІШЕННЯ: Якщо сайт заблокував доступ, беремо опис з RSS
+            if not data or not data.get('text'):
+                summary_html = getattr(entry, "summary", "") or getattr(entry, "description", "")
+                clean_text = re.sub(r'<[^>]+>', ' ', summary_html).strip()
+                
+                if len(clean_text) > 50:
+                    print(f"⚠️ Текст закрито захистом. Беремо опис з RSS: {entry.link[:60]}")
+                    data = {
+                        "text": clean_text,
+                        "title": entry.title,
+                        "image": None
+                    }
+
             if data and data.get('text'):
                 print(f"🆕 RSS: {entry.title[:60]}")
                 process_and_send(data, entry.link, processed_urls)
             else:
-                # ✅ Битий URL — записуємо щоб не перевіряти знову
-                print(f"⏭️ Не вдалось отримати текст — пропускаємо: {entry.link[:60]}")
+                # ✅ Якщо текст так і не знайдено — записуємо щоб не перевіряти знову
+                print(f"⏭️ Не вдалось отримати текст взагалі — пропускаємо: {entry.link[:60]}")
                 save_processed_url(entry.link)
                 processed_urls.add(entry.link)
 
@@ -224,7 +240,6 @@ if __name__ == "__main__":
     # 08:30 UTC = 10:30 Київ — перші новини після дайджесту
     schedule.every().day.at("08:30").do(run_news_scout)
     # ✅ Новини кожні 60 хвилин після попереднього запуску
-    # (не чекає круглої години — запускає через 60 хв після старту)
     schedule.every(60).minutes.do(run_news_scout)
 
     print("🔍 Перший запуск парсингу при старті...")
