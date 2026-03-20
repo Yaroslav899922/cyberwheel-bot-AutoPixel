@@ -11,9 +11,9 @@ import autoconsulting_parser
 import morning_digest
 
 DB_FILE          = "parsed_urls.txt"
-DIGEST_DATE_FILE = "last_digest_date.txt"  # зберігає дату останньої відправки дайджесту
+DIGEST_DATE_FILE = "last_digest_date.txt"
+KYIV_TZ          = pytz.timezone("Europe/Kiev")
 
-# ─────────────────────────────────────────────────────────────
 def load_sources():
     if not os.path.exists("sources.txt"):
         return ["https://ain.ua/feed/"]
@@ -43,31 +43,44 @@ def cleanup_old_urls(max_lines=2000):
             f.write("\n".join(lines[-max_lines:]) + "\n")
 
 def was_digest_sent_today():
-    """Перевіряє чи дайджест вже відправлявся сьогодні."""
     if not os.path.exists(DIGEST_DATE_FILE):
         return False
     with open(DIGEST_DATE_FILE, "r") as f:
-        last_date = f.read().strip()
-    return last_date == str(date.today())
+        return f.read().strip() == str(date.today())
 
 def mark_digest_sent():
-    """Записує сьогоднішню дату після відправки дайджесту."""
     with open(DIGEST_DATE_FILE, "w") as f:
         f.write(str(date.today()))
 
-# ─────────────────────────────────────────────────────────────
+def get_today_kyiv():
+    return datetime.now(KYIV_TZ).strftime("%Y-%m-%d")
+
+def is_entry_today(entry):
+    """
+    Перевіряє чи RSS стаття опублікована сьогодні за Києвом.
+    Якщо feedparser не дав дату — дозволяємо (деякі RSS не дають дату).
+    """
+    today     = get_today_kyiv()
+    published = getattr(entry, "published_parsed", None)
+    if not published:
+        return True
+    try:
+        entry_dt   = datetime(*published[:6], tzinfo=pytz.utc)
+        entry_date = entry_dt.astimezone(KYIV_TZ).strftime("%Y-%m-%d")
+        return entry_date == today
+    except Exception:
+        return True
+
 def process_and_send(data, url, processed_urls):
     raw_summary = brain.summarize_text(data['text'], data['title'])
 
     if "[TITLE]:" in raw_summary:
-        parts = raw_summary.split("[TITLE]:", 1)[1].split("\n", 1)
+        parts     = raw_summary.split("[TITLE]:", 1)[1].split("\n", 1)
         final_msg = f"⚡️ <b>{parts[0].strip().upper()}</b>\n\n{parts[1].strip()}"
     else:
         final_msg = raw_summary
 
-    # Вшиваємо посилання на оригінал прямо в текст — без окремої кнопки
     source_link = f"\n\n<a href='{url}'><b>Читати повністю →</b></a>" if url else ""
-
     social_links = (
         "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
         "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
@@ -78,103 +91,102 @@ def process_and_send(data, url, processed_urls):
 
     success = telegram_bot.send_telegram_message(
         text=final_msg,
-        url=None,          # url=None — прибираємо зелену кнопку знизу
+        url=None,
         image_url=data.get('image')
     )
 
     if success:
         save_processed_url(url)
         processed_urls.add(url)
-        print(f"✅ URL збережено: {url[:60]}...")
+        print(f"✅ Збережено: {url[:60]}...")
     else:
-        print(f"⚠️ Telegram не отримав повідомлення. Спробуємо наступного разу.")
+        print(f"⚠️ Не відправлено — спробуємо наступного разу.")
 
     time.sleep(10)
 
-# ─────────────────────────────────────────────────────────────
 def send_morning_digest():
     """
-    Відправляє ранковий дайджест.
-    Викликається schedule рівно о 08:00.
-    Захищений від повторної відправки через last_digest_date.txt —
-    якщо Render перезапустився після 08:00, дайджест не дублюється.
+    Дайджест о 10:00 Київ (08:00 UTC).
+    Захист від дублів через last_digest_date.txt.
     """
     if was_digest_sent_today():
-        print("⏭️ Ранковий дайджест сьогодні вже відправлявся — пропускаємо.")
+        print("⏭️ Дайджест сьогодні вже відправлявся.")
         return
 
     print("\n🌅 Відправляю ранковий дайджест...")
     try:
         digest_msg = morning_digest.build_morning_digest()
-        success = telegram_bot.send_telegram_message(text=digest_msg)
+        success    = telegram_bot.send_telegram_message(text=digest_msg)
         if success:
             mark_digest_sent()
-            print("✅ Ранковий дайджест відправлено!")
+            print("✅ Дайджест відправлено!")
         else:
-            print("❌ Дайджест не відправлено — спробуємо наступного разу.")
+            print("❌ Дайджест не відправлено.")
     except Exception as e:
         print(f"❌ Помилка дайджесту: {type(e).__name__}: {e}")
 
-    # Пауза 30 хвилин після дайджесту перед новинами
-    # Використовуємо окремий відкладений запуск щоб не блокувати schedule
-    print("⏸️ Пауза 30 хвилин перед новинами...")
+    # Пауза 30 хвилин після дайджесту — потім одразу новини
+    print("⏸️ Пауза 30 хв перед новинами...")
     time.sleep(1800)
-    run_news_scout()  # одразу після паузи запускаємо новини
+    run_news_scout()
 
-# ─────────────────────────────────────────────────────────────
 def run_news_scout():
-    """Парсить новини з усіх джерел. Викликається щогодини і після дайджесту."""
+    today          = get_today_kyiv()
     processed_urls = load_processed_urls()
     cleanup_old_urls()
 
-    # ── БЛОК 1: RSS-джерела ──────────────────────────────────
+    print(f"\n🔍 Парсинг новин за {today}")
+
+    # ── БЛОК 1: RSS — спочатку, тільки сьогоднішні ──────────
     for rss_url in RSS_SOURCES:
-        print(f"\n📡 Перевіряю RSS: {rss_url}")
+        print(f"\n📡 RSS: {rss_url}")
         try:
             feed = feedparser.parse(rss_url)
         except Exception as e:
-            print(f"❌ RSS {rss_url}: {type(e).__name__}: {e}")
+            print(f"❌ {rss_url}: {type(e).__name__}: {e}")
             continue
 
-        new_entries = [e for e in feed.entries if e.link not in processed_urls]
-        for entry in new_entries[:3]:
+        new_entries = [
+            e for e in feed.entries
+            if e.link not in processed_urls and is_entry_today(e)
+        ]
+        print(f"   Сьогоднішніх нових: {len(new_entries)}")
+
+        for entry in new_entries[:2]:
             data = main.fetch_article_data(entry.link)
             if data and data.get('text'):
                 print(f"🆕 RSS: {entry.title[:60]}")
                 process_and_send(data, entry.link, processed_urls)
 
-    # ── БЛОК 2: AutoConsulting ────────────────────────────────
+    # ── БЛОК 2: AutoConsulting — після RSS, тільки сьогодні ──
     print(f"\n{'─'*50}")
-    print("🚗 Перевіряю AutoConsulting...")
+    print("🚗 AutoConsulting...")
     try:
-        ac_articles = autoconsulting_parser.get_new_articles(processed_urls)
+        ac_articles = autoconsulting_parser.get_new_articles(processed_urls, max_total=3)
         for article in ac_articles:
             print(f"🆕 AutoConsulting: {article['data']['title'][:60]}")
             process_and_send(article['data'], article['url'], processed_urls)
     except Exception as e:
         print(f"❌ AutoConsulting: {type(e).__name__}: {e}")
 
-# ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import web_server
 
     print("🌐 Запускаю фоновий веб-сервер...")
     web_server.keep_alive()
 
-    print("🚀 CyberWheel стартував з планувальником!")
+    print("🚀 CyberWheel стартував!")
 
-    # ── РОЗКЛАД ──────────────────────────────────────────────
-    # Дайджест рівно о 08:00 за Києвом
+    # 08:00 UTC = 10:00 Київ — дайджест
     schedule.every().day.at("08:00").do(send_morning_digest)
     # Новини щогодини
     schedule.every().hour.do(run_news_scout)
 
-    # Одразу при старті — перевіряємо новини (не чекаємо першої години)
-    print("🔍 Перший запуск парсингу новин...")
+    print("🔍 Перший запуск парсингу при старті...")
     run_news_scout()
 
-    print("📅 Планувальник активний. Дайджест о 08:00, новини щогодини.")
+    print("📅 Дайджест о 10:00 Київ, новини щогодини.")
 
     while True:
         schedule.run_pending()
-        time.sleep(30)  # перевіряємо розклад кожні 30 секунд
+        time.sleep(30)
