@@ -6,6 +6,8 @@ import schedule
 import email.utils
 import random
 import re
+import urllib.request
+import json as _json
 from datetime import datetime, date, timedelta
 import main
 import brain
@@ -17,6 +19,28 @@ DB_FILE          = "parsed_urls.txt"
 DIGEST_DATE_FILE = "last_digest_date.txt"
 KYIV_TZ          = pytz.timezone("Europe/Kiev")
 
+# ── REDIS (Upstash) ───────────────────────────────────────────────────────────
+REDIS_URL   = os.getenv("UPSTASH_REDIS_REST_URL")
+REDIS_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
+REDIS_KEY   = "parsed_urls"
+
+def _redis(cmd_parts):
+    """Мінімальний REST-клієнт для Upstash Redis. Повертає None при помилці."""
+    if not REDIS_URL or not REDIS_TOKEN:
+        return None
+    url = REDIS_URL.rstrip("/") + "/" + "/".join(str(p) for p in cmd_parts)
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {REDIS_TOKEN}"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return _json.loads(r.read())
+    except Exception as e:
+        print(f"⚠️ Redis помилка: {e}")
+        return None
+# ─────────────────────────────────────────────────────────────────────────────
+
 def load_sources():
     if not os.path.exists("sources.txt"):
         return ["https://ain.ua/feed/"]
@@ -26,24 +50,28 @@ def load_sources():
 RSS_SOURCES = load_sources()
 
 def load_processed_urls():
+    """Завантажує оброблені URL з Redis. Якщо Redis недоступний — з файлу."""
+    result = _redis(["SMEMBERS", REDIS_KEY])
+    if result and "result" in result:
+        urls = set(result["result"])
+        print(f"✅ Redis: завантажено {len(urls)} URL з постійної пам'яті")
+        return urls
+    # Fallback на файл
+    print("⚠️ Redis недоступний — використовую parsed_urls.txt як резерв")
     if not os.path.exists(DB_FILE):
         return set()
     with open(DB_FILE, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f)
 
 def save_processed_url(url):
+    """Зберігає URL в Redis (постійно) і у файл (резервно)."""
+    _redis(["SADD", REDIS_KEY, url])
     with open(DB_FILE, "a", encoding="utf-8") as f:
         f.write(url + "\n")
 
 def cleanup_old_urls(max_lines=2000):
-    if not os.path.exists(DB_FILE):
-        return
-    with open(DB_FILE, "r", encoding="utf-8") as f:
-        lines = [l.strip() for l in f if l.strip()]
-    if len(lines) > max_lines:
-        print(f"🧹 Очищення бази: {len(lines)} → {max_lines} записів")
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines[-max_lines:]) + "\n")
+    """Redis Set автоматично не має дублів і не скидається — очищення не потрібне."""
+    pass
 
 def was_digest_sent_today():
     if not os.path.exists(DIGEST_DATE_FILE):
@@ -77,16 +105,15 @@ def is_rss_title_relevant(title):
 
 def is_entry_recent(entry):
     """
-    ✅ ВИПРАВЛЕНО: Дозволяє статті за сьогодні та вчора.
+    Дозволяє статті за сьогодні та вчора.
     Так бот зранку підтягне ті новини, які вийшли пізно вночі.
     """
     now = datetime.now(KYIV_TZ)
     allowed_dates = [
-        now.strftime("%Y-%m-%d"), 
+        now.strftime("%Y-%m-%d"),
         (now - timedelta(days=1)).strftime("%Y-%m-%d")
     ]
 
-    # Спочатку пробуємо через рядок published
     published_str = getattr(entry, "published", "")
     if published_str:
         try:
@@ -96,16 +123,29 @@ def is_entry_recent(entry):
         except Exception:
             pass
 
-    # Запасний — через published_parsed
     published = getattr(entry, "published_parsed", None)
     if not published:
-        return True  # якщо дати нема — пропускаємо (дозволяємо)
+        return True
     try:
         entry_dt   = datetime(*published[:6], tzinfo=pytz.utc)
         entry_date = entry_dt.astimezone(KYIV_TZ).strftime("%Y-%m-%d")
         return entry_date in allowed_dates
     except Exception:
         return True
+
+def smart_sleep(seconds):
+    """
+    Спить вказаний час (пауза між постами), але переривається, якщо настає 22:00.
+    Це вирішує проблему, коли бот 'застрягав' в паузі і пропускав вечірнє повідомлення.
+    False = паузу перервано (настало 22:00), True = пауза пройшла успішно.
+    """
+    end_time = time.time() + seconds
+    while time.time() < end_time:
+        if datetime.now(KYIV_TZ).hour >= 22:
+            print("⏰ Настав час сну (22:00+). Перериваємо паузу для відправки повідомлення!")
+            return False
+        time.sleep(5)
+    return True
 
 def process_and_send(data, url, processed_urls):
     raw_summary = brain.summarize_text(data['text'], data['title'])
@@ -134,14 +174,18 @@ def process_and_send(data, url, processed_urls):
     if success:
         save_processed_url(url)
         processed_urls.add(url)
-        print(f"✅ Збережено: {url[:60]}...")
-        
-        # ✅ НОВА ЛОГІКА: Рандомна пауза між публікаціями від 5 до 7 хвилин
+        print(f"✅ Збережено в хмарну базу: {url[:60]}...")
+
         pause_seconds = random.randint(300, 420)
         print(f"⏳ Чекаю {pause_seconds // 60} хв і {pause_seconds % 60} сек перед наступним постом, щоб не спамити...")
-        time.sleep(pause_seconds)
+
+        # Якщо під час паузи настало 22:00 — повертаємо False, щоб зупинити весь парсинг
+        if not smart_sleep(pause_seconds):
+            return False
     else:
         print(f"⚠️ Не відправлено — спробуємо наступного разу.")
+
+    return True
 
 def send_morning_digest():
     if was_digest_sent_today():
@@ -157,7 +201,6 @@ def send_morning_digest():
     except Exception as e:
         print(f"❌ Помилка дайджесту: {type(e).__name__}: {e}")
 
-# ✅ ОНОВЛЕНА ФУНКЦІЯ: Ідеальний дизайн та правильний тон для вечірнього побажання
 def send_evening_message():
     print("\n🌙 Відправляю вечірнє побажання...")
     prompt = """Ти — Агент Софія, куратор автоканалу Skoda_Kremen_News. 
@@ -176,12 +219,10 @@ def send_evening_message():
             contents=prompt
         )
         ai_text = response.text.strip()
-        # Про всяк випадок чистимо від можливих зірочок, якщо ШІ їх додасть
         ai_text = re.sub(r'[*_`]', '', ai_text)
-        
-        # Формуємо фірмовий стиль повідомлення
+
         final_msg = f"🌙 <b>НА ДОБРАНІЧ</b>\n\n{ai_text}\n\n✨ <i>Ваш Агент Софія</i>"
-        
+
         social_links = (
             "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
             "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
@@ -231,7 +272,6 @@ def run_news_scout():
             print(f"❌ Помилка RSS {rss_url}: {type(e).__name__}: {e}")
             continue
 
-        # ✅ Використовуємо is_entry_recent замість is_entry_today
         new_entries = [
             e for e in feed.entries
             if e.link not in processed_urls
@@ -242,16 +282,14 @@ def run_news_scout():
 
         for entry in new_entries[:5]:
             data = main.fetch_article_data(entry.link)
-            
-            # 💡 ГЛОБАЛЬНЕ РІШЕННЯ: Якщо сайт заблокував доступ, беремо опис з RSS
+
             if not data or not data.get('text'):
                 summary_html = getattr(entry, "summary", "") or getattr(entry, "description", "")
                 clean_text = re.sub(r'<[^>]+>', ' ', summary_html).strip()
-                
+
                 if len(clean_text) > 30:
                     print(f"⚠️ Текст закрито захистом. Беремо опис з RSS: {entry.link[:60]}")
-                    
-                    # 🖼️ Шукаємо картинку всередині RSS-стрічки
+
                     rss_image = None
                     if hasattr(entry, 'media_content') and entry.media_content:
                         rss_image = entry.media_content[0].get('url')
@@ -273,7 +311,9 @@ def run_news_scout():
 
             if data and data.get('text'):
                 print(f"🆕 RSS: {entry.title[:60]}")
-                process_and_send(data, entry.link, processed_urls)
+                # Якщо настало 22:00 під час паузи — зупиняємо весь парсинг
+                if not process_and_send(data, entry.link, processed_urls):
+                    return
             else:
                 print(f"⏭️ Не вдалось отримати текст взагалі — пропускаємо: {entry.link[:60]}")
                 save_processed_url(entry.link)
@@ -286,7 +326,9 @@ def run_news_scout():
         ac_articles = autoconsulting_parser.get_new_articles(processed_urls, max_total=3)
         for article in ac_articles:
             print(f"🆕 AutoConsulting: {article['data']['title'][:60]}")
-            process_and_send(article['data'], article['url'], processed_urls)
+            # Якщо настало 22:00 під час паузи — зупиняємо весь парсинг
+            if not process_and_send(article['data'], article['url'], processed_urls):
+                return
     except Exception as e:
         print(f"❌ AutoConsulting: {type(e).__name__}: {e}")
 
@@ -296,17 +338,17 @@ if __name__ == "__main__":
     print("🌐 Запускаю фоновий веб-сервер...")
     web_server.keep_alive()
 
-    print("🚀 CyberWheel стартував!")
+    print("🚀 CyberWheel стартував з хмарною пам'яттю!")
 
     # 08:00 UTC = 10:00 Київ — дайджест
     schedule.every().day.at("08:00").do(send_morning_digest)
-    
+
     # 08:30 UTC = 10:30 Київ — перші новини після дайджесту
     schedule.every().day.at("08:30").do(run_news_scout)
-    
+
     # 20:00 UTC = 22:00 Київ — Вечірнє побажання
     schedule.every().day.at("20:00").do(send_evening_message)
-    
+
     # Новини щогодини (нічний фільтр заблокує парсинг з 22:00 до 10:00)
     schedule.every(60).minutes.do(run_news_scout)
 
