@@ -8,4 +8,6 @@ https://www.motor1.com/rss/news/all/
 https://www.motor1.com/rss/reviews/all/
 https://www.motor1.com/rss/features/all/
 https://www.motor1.com/rss/category/rumors/
-https://news.infocar.ua/rss/
+https://www.carscoops.com/feed/
+https://www.autocar.co.uk/rss
+https://carnewschina.com/feed/
