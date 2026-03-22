@@ -12,7 +12,6 @@ from datetime import datetime, date, timedelta
 import main
 import brain
 import telegram_bot
-import autoconsulting_parser
 import morning_digest
 
 DB_FILE          = "parsed_urls.txt"
@@ -25,13 +24,22 @@ REDIS_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 REDIS_KEY   = "parsed_urls"
 
 def _redis(cmd_parts):
-    """Мінімальний REST-клієнт для Upstash Redis. Повертає None при помилці."""
+    """Мінімальний REST-клієнт для Upstash Redis. 
+    Використовує POST для коректної передачі посилань без їх розрізання по слешах."""
     if not REDIS_URL or not REDIS_TOKEN:
         return None
-    url = REDIS_URL.rstrip("/") + "/" + "/".join(str(p) for p in cmd_parts)
+    
+    url = REDIS_URL.rstrip("/")
+    data = _json.dumps(cmd_parts).encode('utf-8')
+    
     req = urllib.request.Request(
         url,
-        headers={"Authorization": f"Bearer {REDIS_TOKEN}"}
+        data=data,
+        headers={
+            "Authorization": f"Bearer {REDIS_TOKEN}",
+            "Content-Type": "application/json"
+        },
+        method="POST"
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
@@ -318,19 +326,6 @@ def run_news_scout():
                 print(f"⏭️ Не вдалось отримати текст взагалі — пропускаємо: {entry.link[:60]}")
                 save_processed_url(entry.link)
                 processed_urls.add(entry.link)
-
-    # ── БЛОК 2: AutoConsulting ────────────────────────────────
-    print(f"\n{'─'*50}")
-    print("🚗 AutoConsulting...")
-    try:
-        ac_articles = autoconsulting_parser.get_new_articles(processed_urls, max_total=3)
-        for article in ac_articles:
-            print(f"🆕 AutoConsulting: {article['data']['title'][:60]}")
-            # Якщо настало 22:00 під час паузи — зупиняємо весь парсинг
-            if not process_and_send(article['data'], article['url'], processed_urls):
-                return
-    except Exception as e:
-        print(f"❌ AutoConsulting: {type(e).__name__}: {e}")
 
 if __name__ == "__main__":
     import web_server
