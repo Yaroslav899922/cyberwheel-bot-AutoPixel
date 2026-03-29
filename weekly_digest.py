@@ -152,38 +152,49 @@ def pick_top5_with_gemini(headlines: list[dict]) -> list[dict] | None:
 - Рівно 5 елементів, не більше і не менше
 """
 
-    try:
-        response = brain.client.models.generate_content(
-            model="gemini-flash-lite-latest",
-            contents=prompt
-        )
-        raw = response.text.strip()
+    # ✅ Той самий fallback що і в brain.py
+    models = [
+        "gemini-flash-lite-latest",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-flash-latest"
+    ]
 
-        # Прибираємо можливі markdown-огорожі
-        raw = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
+    for m in models:
+        try:
+            response = brain.client.models.generate_content(
+                model=m,
+                contents=prompt
+            )
+            raw = response.text.strip()
 
-        top5_indices = _json.loads(raw)
+            # Прибираємо можливі markdown-огорожі
+            raw = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
 
-        result = []
-        for item in top5_indices:
-            idx = item.get("index", 0) - 1  # перетворюємо на 0-based
-            if 0 <= idx < len(headlines):
-                result.append({
-                    "title": headlines[idx]["title"],
-                    "url":   headlines[idx]["url"],
-                    "why":   item.get("why", "").strip()
-                })
+            top5_indices = _json.loads(raw)
 
-        if len(result) == 5:
-            print("✅ [WeeklyDigest] Gemini обрав топ-5 успішно.")
-            return result
-        else:
-            print(f"⚠️ [WeeklyDigest] Gemini повернув {len(result)} замість 5.")
-            return None
+            result = []
+            for item in top5_indices:
+                idx = item.get("index", 0) - 1  # перетворюємо на 0-based
+                if 0 <= idx < len(headlines):
+                    result.append({
+                        "title": headlines[idx]["title"],
+                        "url":   headlines[idx]["url"],
+                        "why":   item.get("why", "").strip()
+                    })
 
-    except Exception as e:
-        print(f"❌ [WeeklyDigest] Gemini помилка при виборі топ-5: {e}")
-        return None
+            if len(result) == 5:
+                print(f"✅ [WeeklyDigest] Модель {m} обрала топ-5 успішно.")
+                return result
+            else:
+                print(f"⚠️ [WeeklyDigest] Модель {m} повернула {len(result)} замість 5.")
+                continue
+
+        except Exception as e:
+            print(f"⚠️ [WeeklyDigest] Модель {m} не відповіла: {e}")
+            continue
+
+    print("❌ [WeeklyDigest] Всі моделі недоступні.")
+    return None
 
 # ── GEMINI: ВЕРДИКТ ───────────────────────────────────────────────────────────
 def get_weekly_verdict(top5: list[dict]) -> str:
@@ -210,18 +221,28 @@ def get_weekly_verdict(top5: list[dict]) -> str:
 - ТІЛЬКИ текст вердикту, без заголовків та підписів
 """
 
-    try:
-        response = brain.client.models.generate_content(
-            model="gemini-flash-lite-latest",
-            contents=prompt
-        )
-        verdict = response.text.strip()
-        # Прибираємо markdown
-        verdict = re.sub(r"[*_`]", "", verdict)
-        return verdict
-    except Exception as e:
-        print(f"❌ [WeeklyDigest] Помилка вердикту: {e}")
-        return "Цього тижня автосвіт не стояв на місці — попереду ще цікавіше."
+    # ✅ Той самий fallback що і в brain.py
+    models = [
+        "gemini-flash-lite-latest",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-flash-latest"
+    ]
+
+    for m in models:
+        try:
+            response = brain.client.models.generate_content(
+                model=m,
+                contents=prompt
+            )
+            verdict = response.text.strip()
+            verdict = re.sub(r"[*_`]", "", verdict)
+            print(f"✅ [WeeklyDigest] Вердикт від моделі {m}.")
+            return verdict
+        except Exception as e:
+            print(f"⚠️ [WeeklyDigest] Модель {m} не відповіла для вердикту: {e}")
+            continue
+
+    return "Цього тижня автосвіт не стояв на місці — попереду ще цікавіше."
 
 # ── ЗБІРКА ПОВІДОМЛЕННЯ ───────────────────────────────────────────────────────
 def build_weekly_digest_message() -> str | None:
