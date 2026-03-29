@@ -273,9 +273,9 @@ def build_weekly_digest_message() -> str | None:
         url   = item["url"]
         why   = item["why"]
 
-        # Назва статті як посилання (якщо є url)
+        # Назва статті як посилання — жирна і клікабельна
         if url:
-            title_html = f'<a href="{url}">{title}</a>'
+            title_html = f'<b><a href="{url}">{title}</a></b>'
         else:
             title_html = f"<b>{title}</b>"
 
