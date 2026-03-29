@@ -68,8 +68,8 @@ def summarize_text(article_text, original_title, is_morning=False):
             response = client.models.generate_content(model=m, contents=prompt)
             raw_text = response.text
 
-            # 1. Тотальне очищення від усіх можливих жирних тегів, щоб уникнути вкладеності
-            cleaned_text = re.sub(r'\*\*(.*?)\*\*', r'\1', raw_text) # прибираємо маркдаун
+            # 1. Тотальне очищення від усіх можливих жирних тегів
+            cleaned_text = re.sub(r'\*\*(.*?)\*\*', r'\1', raw_text) 
             cleaned_text = re.sub(r'</?b>', '', cleaned_text, flags=re.IGNORECASE)
             cleaned_text = re.sub(r'</?strong>', '', cleaned_text, flags=re.IGNORECASE)
             cleaned_text = re.sub(r'</?i>', '', cleaned_text, flags=re.IGNORECASE)
@@ -83,7 +83,7 @@ def summarize_text(article_text, original_title, is_morning=False):
             for header in headers_to_bold:
                 cleaned_text = cleaned_text.replace(header, f"<b>{header}</b>")
 
-            # 4. Виділяємо Škoda та моделі ТІЛЬКИ в тілі тексту (щоб не зламати заголовок [TITLE])
+            # 4. Виділяємо Škoda та моделі ТІЛЬКИ в тілі тексту
             if "[TITLE]:" in cleaned_text:
                 parts = cleaned_text.split("[TITLE]:", 1)
                 before_title = parts[0]
@@ -94,22 +94,20 @@ def summarize_text(article_text, original_title, is_morning=False):
                 else:
                     title_text, body_text = after_title, ""
                     
-                # Робимо жирними бренди тільки в тілі тексту
                 body_text = re.sub(r'(?i)\b(Skoda|Škoda)\b', '<b>Škoda</b>', body_text)
                 models_pattern = r'(?i)\b(Fabia|Scala|Octavia|Superb|Kamiq|Karoq|Kodiaq|Enyaq)\b'
                 body_text = re.sub(models_pattern, r'<b>\1</b>', body_text)
                 
                 cleaned_text = f"{before_title}[TITLE]:{title_text}\n{body_text}"
             else:
-                # Якщо раптом [TITLE] немає, просто застосовуємо до всього
                 cleaned_text = re.sub(r'(?i)\b(Skoda|Škoda)\b', '<b>Škoda</b>', cleaned_text)
                 models_pattern = r'(?i)\b(Fabia|Scala|Octavia|Superb|Kamiq|Karoq|Kodiaq|Enyaq)\b'
                 cleaned_text = re.sub(models_pattern, r'<b>\1</b>', cleaned_text)
 
-            # 5. Прибираємо можливі артефакти Gemini
+            # 5. Прибираємо артефакти Gemini
             cleaned_text = re.sub(r'СЦЕНАРІЙ\s+\d+.*$', '', cleaned_text, flags=re.DOTALL).strip()
 
-            # 6. Надійний спойлер через [QUESTION]: маркер (з логуванням)
+            # 6. ЗГОРНУТИЙ ВЕРДИКТ (Collapsible Quote) через [QUESTION]: маркер
             if "[QUESTION]:" in cleaned_text:
                 parts = cleaned_text.split("[QUESTION]:", 1)
                 main_text = parts[0].strip()
@@ -122,20 +120,20 @@ def summarize_text(article_text, original_title, is_morning=False):
                     verdict_text = v_parts[1].strip()
                     cleaned_text = (
                         f"{before_verdict}{verdict_marker}\n"
-                        f"<tg-spoiler>{verdict_text}</tg-spoiler>\n\n"
+                        f"<blockquote expandable>{verdict_text}</blockquote>\n\n"
                         f"<i>{question_text}</i>"
                     )
                 else:
-                    print("⚠️ Увага: не знайдено заголовок Вердикту — спойлер не застосовано.")
+                    print("⚠️ Увага: не знайдено заголовок Вердикту.")
                     cleaned_text = f"{main_text}\n\n<i>{question_text}</i>"
             else:
-                print("⚠️ Увага: ШІ не згенерував маркер [QUESTION]: — спойлер не застосовано.")
+                print("⚠️ Увага: ШІ не згенерував маркер [QUESTION]:")
 
             print(f"✅ Модель {m} відповіла успішно.")
             return cleaned_text
 
         except Exception as e:
-            print(f"⚠️ Модель {m} не відповіла: {type(e).__name__}: {e}")
+            print(f"⚠️ Модель {m} не відповіла: {e}")
             continue
 
-    return "⚠️ Помилка ШІ: всі моделі Gemini не відповіли. Перевір квоту або API-ключ."
+    return "⚠️ Помилка ШІ."
