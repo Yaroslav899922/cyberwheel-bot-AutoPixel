@@ -14,9 +14,11 @@ import brain
 import telegram_bot
 import morning_digest
 
-DB_FILE          = "parsed_urls.txt"
-DIGEST_DATE_FILE = "last_digest_date.txt"
-KYIV_TZ          = pytz.timezone("Europe/Kiev")
+DB_FILE            = "parsed_urls.txt"
+DIGEST_DATE_FILE   = "last_digest_date.txt"
+EVENING_DATE_FILE  = "last_evening_date.txt"
+MORNING_SCOUT_FILE = "last_morning_scout.txt"
+KYIV_TZ            = pytz.timezone("Europe/Kiev")
 
 # ── REDIS (Upstash) ───────────────────────────────────────────────────────────
 REDIS_URL   = os.getenv("UPSTASH_REDIS_REST_URL")
@@ -81,15 +83,38 @@ def cleanup_old_urls(max_lines=2000):
     """Redis Set автоматично не має дублів і не скидається — очищення не потрібне."""
     pass
 
-def was_digest_sent_today():
-    if not os.path.exists(DIGEST_DATE_FILE):
+# ── КОНТРОЛЕРИ ЧАСУ (КИЇВ) ТА ЗАВДАНЬ ────────────────────────────────────────
+def was_task_done_today(filename):
+    if not os.path.exists(filename):
         return False
-    with open(DIGEST_DATE_FILE, "r") as f:
+    with open(filename, "r") as f:
         return f.read().strip() == str(date.today())
 
-def mark_digest_sent():
-    with open(DIGEST_DATE_FILE, "w") as f:
+def mark_task_done(filename):
+    with open(filename, "w") as f:
         f.write(str(date.today()))
+
+def check_scheduled_tasks():
+    """Контролер завдань: перевіряє Київський час і виконує їх по черзі."""
+    now = datetime.now(KYIV_TZ)
+
+    # 1. Привітання "Добрий ранок" (Дайджест) о 10:00 за Києвом
+    if now.hour == 10 and now.minute >= 0 and not was_task_done_today(DIGEST_DATE_FILE):
+        send_morning_digest()
+        return  # Виходимо, щоб дати паузу перед новинами
+
+    # 2. Перша порція новин о 10:30 за Києвом
+    if now.hour == 10 and now.minute >= 30 and not was_task_done_today(MORNING_SCOUT_FILE):
+        print("\n⏰ Час для першої порції новин (10:30+ за Києвом)")
+        mark_task_done(MORNING_SCOUT_FILE)
+        run_news_scout()
+        return
+
+    # 3. Вечірнє побажання о 22:00 за Києвом
+    if now.hour == 22 and now.minute >= 0 and not was_task_done_today(EVENING_DATE_FILE):
+        send_evening_message()
+        return
+# ─────────────────────────────────────────────────────────────────────────────
 
 def get_today_kyiv():
     return datetime.now(KYIV_TZ).strftime("%Y-%m-%d")
@@ -196,7 +221,7 @@ def process_and_send(data, url, processed_urls):
     return True
 
 def send_morning_digest():
-    if was_digest_sent_today():
+    if was_task_done_today(DIGEST_DATE_FILE):
         print("⏭️ Дайджест сьогодні вже відправлявся.")
         return
     print("\n🌅 Відправляю ранковий дайджест...")
@@ -204,12 +229,16 @@ def send_morning_digest():
         digest_msg = morning_digest.build_morning_digest()
         success    = telegram_bot.send_telegram_message(text=digest_msg)
         if success:
-            mark_digest_sent()
+            mark_task_done(DIGEST_DATE_FILE)
             print("✅ Дайджест відправлено!")
     except Exception as e:
         print(f"❌ Помилка дайджесту: {type(e).__name__}: {e}")
 
 def send_evening_message():
+    if was_task_done_today(EVENING_DATE_FILE):
+        print("⏭️ Вечірнє повідомлення сьогодні вже відправлялось.")
+        return
+        
     print("\n🌙 Відправляю вечірнє побажання...")
     prompt = """Ти — Агент Софія, куратор автоканалу Skoda_Kremen_News. 
     Напиши коротке побажання на добраніч (1-2 речення).
@@ -239,8 +268,10 @@ def send_evening_message():
         )
         final_msg += social_links
 
-        telegram_bot.send_telegram_message(text=final_msg)
-        print("✅ Вечірнє повідомлення відправлено!")
+        success = telegram_bot.send_telegram_message(text=final_msg)
+        if success:
+            mark_task_done(EVENING_DATE_FILE)
+            print("✅ Вечірнє повідомлення відправлено!")
     except Exception as e:
         print(f"❌ Помилка вечірнього повідомлення: {e}")
 
@@ -335,22 +366,16 @@ if __name__ == "__main__":
 
     print("🚀 CyberWheel стартував з хмарною пам'яттю!")
 
-    # 08:00 UTC = 10:00 Київ — дайджест
-    schedule.every().day.at("08:00").do(send_morning_digest)
-
-    # 08:30 UTC = 10:30 Київ — перші новини після дайджесту
-    schedule.every().day.at("08:30").do(run_news_scout)
-
-    # 20:00 UTC = 22:00 Київ — Вечірнє побажання
-    schedule.every().day.at("20:00").do(send_evening_message)
-
-    # Новини щогодини (нічний фільтр заблокує парсинг з 22:00 до 10:00)
-    schedule.every(60).minutes.do(run_news_scout)
-
     print("🔍 Перший запуск парсингу при старті...")
     run_news_scout()
 
-    print("📅 Дайджест о 10:00, новини щогодини, вечірнє побажання о 22:00.")
+    # Запускаємо контролер кожні 5 хвилин (перевіряє ТІЛЬКИ Київський час)
+    schedule.every(5).minutes.do(check_scheduled_tasks)
+
+    # Регулярний парсинг новин щогодини
+    schedule.every(60).minutes.do(run_news_scout)
+
+    print("📅 Дайджест о 10:00, новини щогодини, вечірнє побажання о 22:00 (за Київським часом).")
 
     while True:
         schedule.run_pending()
