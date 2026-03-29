@@ -8,7 +8,7 @@ import random
 import re
 import urllib.request
 import json as _json
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 import main
 import brain
 import telegram_bot
@@ -26,21 +26,13 @@ REDIS_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 REDIS_KEY   = "parsed_urls"
 
 def _redis(cmd_parts):
-    """Мінімальний REST-клієнт для Upstash Redis. 
-    Використовує POST для коректної передачі посилань без їх розрізання по слешах."""
     if not REDIS_URL or not REDIS_TOKEN:
         return None
-    
-    url = REDIS_URL.rstrip("/")
+    url  = REDIS_URL.rstrip("/")
     data = _json.dumps(cmd_parts).encode('utf-8')
-    
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Authorization": f"Bearer {REDIS_TOKEN}",
-            "Content-Type": "application/json"
-        },
+    req  = urllib.request.Request(
+        url, data=data,
+        headers={"Authorization": f"Bearer {REDIS_TOKEN}", "Content-Type": "application/json"},
         method="POST"
     )
     try:
@@ -60,13 +52,11 @@ def load_sources():
 RSS_SOURCES = load_sources()
 
 def load_processed_urls():
-    """Завантажує оброблені URL з Redis. Якщо Redis недоступний — з файлу."""
     result = _redis(["SMEMBERS", REDIS_KEY])
     if result and "result" in result:
         urls = set(result["result"])
         print(f"✅ Redis: завантажено {len(urls)} URL з постійної пам'яті")
         return urls
-    # Fallback на файл
     print("⚠️ Redis недоступний — використовую parsed_urls.txt як резерв")
     if not os.path.exists(DB_FILE):
         return set()
@@ -74,13 +64,11 @@ def load_processed_urls():
         return set(line.strip() for line in f)
 
 def save_processed_url(url):
-    """Зберігає URL в Redis (постійно) і у файл (резервно)."""
     _redis(["SADD", REDIS_KEY, url])
     with open(DB_FILE, "a", encoding="utf-8") as f:
         f.write(url + "\n")
 
 def cleanup_old_urls(max_lines=2000):
-    """Redis Set автоматично не має дублів і не скидається — очищення не потрібне."""
     pass
 
 # ── КОНТРОЛЕРИ ЧАСУ (КИЇВ) ТА ЗАВДАНЬ ────────────────────────────────────────
@@ -88,60 +76,89 @@ def was_task_done_today(filename):
     if not os.path.exists(filename):
         return False
     with open(filename, "r") as f:
-        return f.read().strip() == str(date.today())
+        # ✅ ФІКС: порівнюємо з київською датою, а не UTC сервера
+        return f.read().strip() == get_today_kyiv()
 
 def mark_task_done(filename):
     with open(filename, "w") as f:
-        f.write(str(date.today()))
+        # ✅ ФІКС: записуємо київську дату, а не UTC сервера
+        f.write(get_today_kyiv())
 
 def check_scheduled_tasks():
     """Контролер завдань: перевіряє Київський час і виконує їх по черзі."""
-    now = datetime.now(KYIV_TZ)
+    # ✅ ФІКС: UTC → Kyiv замість прямого now(KYIV_TZ) — надійніше при переходах часу
+    now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
 
-    # 1. Привітання "Добрий ранок" (Дайджест) о 10:00 за Києвом
+    # 1. Дайджест "Добрий ранок" о 10:00
     if now.hour == 10 and now.minute >= 0 and not was_task_done_today(DIGEST_DATE_FILE):
         send_morning_digest()
-        return  # Виходимо, щоб дати паузу перед новинами
-
-    # 2. Перша порція новин о 10:30 за Києвом
-    if now.hour == 10 and now.minute >= 30 and not was_task_done_today(MORNING_SCOUT_FILE):
-        print("\n⏰ Час для першої порції новин (10:30+ за Києвом)")
-        mark_task_done(MORNING_SCOUT_FILE)
-        run_news_scout()
         return
 
-    # 3. Вечірнє побажання о 22:00 за Києвом
+    # 2. Перша порція новин о 10:30
+    # ✅ ФІКС: now.hour > 10 покриває 11:00, 12:05 тощо без чекання :30
+    # (now.hour == 10 and now.minute >= 30) — лише для рівно 10-ї години
+    if (now.hour > 10 or (now.hour == 10 and now.minute >= 30)) \
+            and not was_task_done_today(MORNING_SCOUT_FILE):
+        # Додаткова перевірка: не запускати вночі
+        if now.hour < 22:
+            print("\n⏰ Час для першої порції новин (10:30+ за Києвом)")
+            mark_task_done(MORNING_SCOUT_FILE)
+            run_news_scout()
+            return
+
+    # 3. Вечірнє побажання о 22:00
     if now.hour == 22 and now.minute >= 0 and not was_task_done_today(EVENING_DATE_FILE):
         send_evening_message()
         return
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_today_kyiv():
-    return datetime.now(KYIV_TZ).strftime("%Y-%m-%d")
+    # ✅ UTC → Kyiv для надійності при переходах на літній/зимовий час
+    return datetime.now(pytz.utc).astimezone(KYIV_TZ).strftime("%Y-%m-%d")
 
-# Стоп-слова для RSS — нерелевантний контент
-RSS_STOP_WORDS = [
+# ✅ ФІКС: "bus" і "moto" прибрані — вони є підрядками в нормальних словах!
+# "bus" входить у: business, robust, airbus, Bangkok → різало половину англ. новин
+# Замість цього використовуємо ЦІЛІ слова з перевіркою меж через regex нижче
+RSS_STOP_WORDS_EXACT = [
+    # Українські (підрядкові — ці безпечні, бо специфічні)
     "мотоцикл", "мото", "скутер", "квадроцикл",
     "вантажівк", "тягач", "автобус", "тролейбус",
     "трактор", "комбайн", "причіп", "фура",
-    "motorcycle", "motorbike", "scooter", "truck", "bus",
+    # Англійські — ТІЛЬКИ цілі слова (перевіряємо через regex)
+    "motorcycle", "motorbike", "scooter",
+    "pickup truck", "semi truck", "big rig",
+]
+
+# Англійські стоп-слова, які треба перевіряти як ЦІЛІ слова (не підрядки!)
+RSS_STOP_WORDS_WHOLE = [
+    r"\btruck\b",        # truck — але НЕ "struck", НЕ "Bangkok"
+    r"\bbus\b",          # bus — але НЕ "business", НЕ "robust"
+    r"\bcoach\b",        # автобус (coach)
+    r"\btractor\b",
+    r"\btrailer\b",
 ]
 
 def is_rss_title_relevant(title):
     """Фільтр нерелевантних RSS статей по заголовку."""
     title_lower = title.lower()
-    for word in RSS_STOP_WORDS:
+
+    # Підрядкова перевірка (безпечні слова)
+    for word in RSS_STOP_WORDS_EXACT:
         if word in title_lower:
             print(f"🚫 RSS стоп-слово '{word}': {title[:60]}")
             return False
+
+    # Перевірка ЦІЛИХ слів через regex
+    for pattern in RSS_STOP_WORDS_WHOLE:
+        if re.search(pattern, title_lower):
+            print(f"🚫 RSS стоп-слово (regex) '{pattern}': {title[:60]}")
+            return False
+
     return True
 
 def is_entry_recent(entry):
-    """
-    Дозволяє статті за сьогодні та вчора.
-    Так бот зранку підтягне ті новини, які вийшли пізно вночі.
-    """
-    now = datetime.now(KYIV_TZ)
+    """Дозволяє статті за сьогодні та вчора."""
+    now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
     allowed_dates = [
         now.strftime("%Y-%m-%d"),
         (now - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -168,14 +185,13 @@ def is_entry_recent(entry):
 
 def smart_sleep(seconds):
     """
-    Спить вказаний час (пауза між постами), але переривається, якщо настає 22:00.
-    Це вирішує проблему, коли бот 'застрягав' в паузі і пропускав вечірнє повідомлення.
-    False = паузу перервано (настало 22:00), True = пауза пройшла успішно.
+    Спить вказаний час, але переривається якщо настає 22:00.
+    False = паузу перервано, True = пауза пройшла успішно.
     """
     end_time = time.time() + seconds
     while time.time() < end_time:
-        if datetime.now(KYIV_TZ).hour >= 22:
-            print("⏰ Настав час сну (22:00+). Перериваємо паузу для відправки повідомлення!")
+        if datetime.now(pytz.utc).astimezone(KYIV_TZ).hour >= 22:
+            print("⏰ Настав час сну (22:00+). Перериваємо паузу!")
             return False
         time.sleep(5)
     return True
@@ -210,9 +226,8 @@ def process_and_send(data, url, processed_urls):
         print(f"✅ Збережено в хмарну базу: {url[:60]}...")
 
         pause_seconds = random.randint(300, 420)
-        print(f"⏳ Чекаю {pause_seconds // 60} хв і {pause_seconds % 60} сек перед наступним постом, щоб не спамити...")
+        print(f"⏳ Чекаю {pause_seconds // 60} хв {pause_seconds % 60} сек перед наступним постом...")
 
-        # Якщо під час паузи настало 22:00 — повертаємо False, щоб зупинити весь парсинг
         if not smart_sleep(pause_seconds):
             return False
     else:
@@ -238,7 +253,7 @@ def send_evening_message():
     if was_task_done_today(EVENING_DATE_FILE):
         print("⏭️ Вечірнє повідомлення сьогодні вже відправлялось.")
         return
-        
+
     print("\n🌙 Відправляю вечірнє побажання...")
     prompt = """Ти — Агент Софія, куратор автоканалу Skoda_Kremen_News. 
     Напиши коротке побажання на добраніч (1-2 речення).
@@ -259,7 +274,6 @@ def send_evening_message():
         ai_text = re.sub(r'[*_`]', '', ai_text)
 
         final_msg = f"🌙 <b>НА ДОБРАНІЧ</b>\n\n{ai_text}\n\n✨ <i>Ваш Агент Софія</i>"
-
         social_links = (
             "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
             "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
@@ -277,9 +291,10 @@ def send_evening_message():
 
 def run_news_scout():
     # 🌙 ЗАХИСТ ВІД НІЧНОГО ПАРСИНГУ
-    current_hour = datetime.now(KYIV_TZ).hour
+    # ✅ UTC → Kyiv для надійності при переходах на літній/зимовий час
+    current_hour = datetime.now(pytz.utc).astimezone(KYIV_TZ).hour
     if current_hour >= 22 or current_hour < 10:
-        print(f"😴 Нічний режим ({current_hour}:00). Парсинг зупинено. Бот відпочиває до 10:00 ранку.")
+        print(f"😴 Нічний режим ({current_hour}:00). Парсинг зупинено до 10:00.")
         return
 
     today          = get_today_kyiv()
@@ -289,7 +304,6 @@ def run_news_scout():
     print(f"\n🔍 Парсинг новин за {today} (включаючи вчорашні нічні)")
     print(f"📋 RSS джерел: {len(RSS_SOURCES)}")
 
-    # ── БЛОК 1: RSS ──────────────────────────────────────────
     for rss_url in RSS_SOURCES:
         pause = random.uniform(5, 15)
         print(f"⏳ Пауза {pause:.1f}с...")
@@ -324,7 +338,7 @@ def run_news_scout():
 
             if not data or not data.get('text'):
                 summary_html = getattr(entry, "summary", "") or getattr(entry, "description", "")
-                clean_text = re.sub(r'<[^>]+>', ' ', summary_html).strip()
+                clean_text   = re.sub(r'<[^>]+>', ' ', summary_html).strip()
 
                 if len(clean_text) > 30:
                     print(f"⚠️ Текст закрито захистом. Беремо опис з RSS: {entry.link[:60]}")
@@ -342,19 +356,14 @@ def run_news_scout():
                         if img_match:
                             rss_image = img_match.group(1)
 
-                    data = {
-                        "text": clean_text,
-                        "title": entry.title,
-                        "image": rss_image
-                    }
+                    data = {"text": clean_text, "title": entry.title, "image": rss_image}
 
             if data and data.get('text'):
                 print(f"🆕 RSS: {entry.title[:60]}")
-                # Якщо настало 22:00 під час паузи — зупиняємо весь парсинг
                 if not process_and_send(data, entry.link, processed_urls):
                     return
             else:
-                print(f"⏭️ Не вдалось отримати текст взагалі — пропускаємо: {entry.link[:60]}")
+                print(f"⏭️ Не вдалось отримати текст — пропускаємо: {entry.link[:60]}")
                 save_processed_url(entry.link)
                 processed_urls.add(entry.link)
 
@@ -366,10 +375,12 @@ if __name__ == "__main__":
 
     print("🚀 CyberWheel стартував з хмарною пам'яттю!")
 
-    print("🔍 Перший запуск парсингу при старті...")
-    run_news_scout()
+    # ✅ ФІКС: при старті одразу перевіряємо чи треба щось зробити прямо зараз
+    # (захист від ситуації коли сервер перезапустився вдень і пропустив завдання)
+    print("🔎 Перевірка пропущених завдань після старту...")
+    check_scheduled_tasks()
 
-    # Запускаємо контролер кожні 5 хвилин (перевіряє ТІЛЬКИ Київський час)
+    # Запускаємо контролер кожні 5 хвилин
     schedule.every(5).minutes.do(check_scheduled_tasks)
 
     # Регулярний парсинг новин щогодини
