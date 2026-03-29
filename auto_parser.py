@@ -13,11 +13,13 @@ import main
 import brain
 import telegram_bot
 import morning_digest
+import weekly_digest          # 🆕 Тижневий дайджест
 
 DB_FILE            = "parsed_urls.txt"
 DIGEST_DATE_FILE   = "last_digest_date.txt"
 EVENING_DATE_FILE  = "last_evening_date.txt"
 MORNING_SCOUT_FILE = "last_morning_scout.txt"
+WEEKLY_DATE_FILE   = "last_weekly_digest.txt"   # 🆕 Маркер тижневого дайджесту
 KYIV_TZ            = pytz.timezone("Europe/Kiev")
 
 # ── REDIS (Upstash) ───────────────────────────────────────────────────────────
@@ -76,17 +78,28 @@ def was_task_done_today(filename):
     if not os.path.exists(filename):
         return False
     with open(filename, "r") as f:
-        # ✅ ФІКС: порівнюємо з київською датою, а не UTC сервера
         return f.read().strip() == get_today_kyiv()
+
+# 🆕 Маркер тижневого дайджесту — зберігає ISO-тиждень (рік+номер тижня)
+def was_weekly_done_this_week(filename):
+    if not os.path.exists(filename):
+        return False
+    now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
+    current_week = now.strftime("%Y-W%W")   # наприклад "2026-W13"
+    with open(filename, "r") as f:
+        return f.read().strip() == current_week
+
+def mark_weekly_done(filename):
+    now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
+    with open(filename, "w") as f:
+        f.write(now.strftime("%Y-W%W"))
 
 def mark_task_done(filename):
     with open(filename, "w") as f:
-        # ✅ ФІКС: записуємо київську дату, а не UTC сервера
         f.write(get_today_kyiv())
 
 def check_scheduled_tasks():
     """Контролер завдань: перевіряє Київський час і виконує їх по черзі."""
-    # ✅ ФІКС: UTC → Kyiv замість прямого now(KYIV_TZ) — надійніше при переходах часу
     now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
 
     # 1. Дайджест "Добрий ранок" о 10:00
@@ -95,45 +108,41 @@ def check_scheduled_tasks():
         return
 
     # 2. Перша порція новин о 10:30
-    # ✅ ФІКС: now.hour > 10 покриває 11:00, 12:05 тощо без чекання :30
-    # (now.hour == 10 and now.minute >= 30) — лише для рівно 10-ї години
     if (now.hour > 10 or (now.hour == 10 and now.minute >= 30)) \
             and not was_task_done_today(MORNING_SCOUT_FILE):
-        # Додаткова перевірка: не запускати вночі
         if now.hour < 22:
             print("\n⏰ Час для першої порції новин (10:30+ за Києвом)")
             mark_task_done(MORNING_SCOUT_FILE)
             run_news_scout()
             return
 
-    # 3. Вечірнє побажання о 22:00
+    # 3. 🆕 Тижневий дайджест — тільки неділя о 21:45
+    if now.weekday() == 6 and now.hour == 21 and now.minute >= 45 \
+            and not was_weekly_done_this_week(WEEKLY_DATE_FILE):
+        send_weekly_digest()
+        return
+
+    # 4. Вечірнє побажання о 22:00
     if now.hour == 22 and now.minute >= 0 and not was_task_done_today(EVENING_DATE_FILE):
         send_evening_message()
         return
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_today_kyiv():
-    # ✅ UTC → Kyiv для надійності при переходах на літній/зимовий час
     return datetime.now(pytz.utc).astimezone(KYIV_TZ).strftime("%Y-%m-%d")
 
-# ✅ ФІКС: "bus" і "moto" прибрані — вони є підрядками в нормальних словах!
-# "bus" входить у: business, robust, airbus, Bangkok → різало половину англ. новин
-# Замість цього використовуємо ЦІЛІ слова з перевіркою меж через regex нижче
 RSS_STOP_WORDS_EXACT = [
-    # Українські (підрядкові — ці безпечні, бо специфічні)
     "мотоцикл", "мото", "скутер", "квадроцикл",
     "вантажівк", "тягач", "автобус", "тролейбус",
     "трактор", "комбайн", "причіп", "фура",
-    # Англійські — ТІЛЬКИ цілі слова (перевіряємо через regex)
     "motorcycle", "motorbike", "scooter",
     "pickup truck", "semi truck", "big rig",
 ]
 
-# Англійські стоп-слова, які треба перевіряти як ЦІЛІ слова (не підрядки!)
 RSS_STOP_WORDS_WHOLE = [
-    r"\btruck\b",        # truck — але НЕ "struck", НЕ "Bangkok"
-    r"\bbus\b",          # bus — але НЕ "business", НЕ "robust"
-    r"\bcoach\b",        # автобус (coach)
+    r"\btruck\b",
+    r"\bbus\b",
+    r"\bcoach\b",
     r"\btractor\b",
     r"\btrailer\b",
 ]
@@ -141,19 +150,14 @@ RSS_STOP_WORDS_WHOLE = [
 def is_rss_title_relevant(title):
     """Фільтр нерелевантних RSS статей по заголовку."""
     title_lower = title.lower()
-
-    # Підрядкова перевірка (безпечні слова)
     for word in RSS_STOP_WORDS_EXACT:
         if word in title_lower:
             print(f"🚫 RSS стоп-слово '{word}': {title[:60]}")
             return False
-
-    # Перевірка ЦІЛИХ слів через regex
     for pattern in RSS_STOP_WORDS_WHOLE:
         if re.search(pattern, title_lower):
             print(f"🚫 RSS стоп-слово (regex) '{pattern}': {title[:60]}")
             return False
-
     return True
 
 def is_entry_recent(entry):
@@ -163,7 +167,6 @@ def is_entry_recent(entry):
         now.strftime("%Y-%m-%d"),
         (now - timedelta(days=1)).strftime("%Y-%m-%d")
     ]
-
     published_str = getattr(entry, "published", "")
     if published_str:
         try:
@@ -172,7 +175,6 @@ def is_entry_recent(entry):
             return entry_date in allowed_dates
         except Exception:
             pass
-
     published = getattr(entry, "published_parsed", None)
     if not published:
         return True
@@ -201,8 +203,10 @@ def process_and_send(data, url, processed_urls):
 
     if "[TITLE]:" in raw_summary:
         parts     = raw_summary.split("[TITLE]:", 1)[1].split("\n", 1)
-        final_msg = f"⚡️ <b>{parts[0].strip().upper()}</b>\n\n{parts[1].strip()}"
+        ua_title  = parts[0].strip()                          # 🆕 зберігаємо заголовок
+        final_msg = f"⚡️ <b>{ua_title.upper()}</b>\n\n{parts[1].strip()}"
     else:
+        ua_title  = data['title']                             # 🆕 fallback на оригінал
         final_msg = raw_summary
 
     source_link  = f"\n\n<a href='{url}'><b>Читати повністю →</b></a>" if url else ""
@@ -224,6 +228,9 @@ def process_and_send(data, url, processed_urls):
         save_processed_url(url)
         processed_urls.add(url)
         print(f"✅ Збережено в хмарну базу: {url[:60]}...")
+
+        # 🆕 Зберігаємо заголовок у тижневий список
+        weekly_digest.add_headline_to_weekly(ua_title, url)
 
         pause_seconds = random.randint(300, 420)
         print(f"⏳ Чекаю {pause_seconds // 60} хв {pause_seconds % 60} сек перед наступним постом...")
@@ -248,6 +255,20 @@ def send_morning_digest():
             print("✅ Дайджест відправлено!")
     except Exception as e:
         print(f"❌ Помилка дайджесту: {type(e).__name__}: {e}")
+
+# 🆕 Відправка тижневого дайджесту
+def send_weekly_digest():
+    if was_weekly_done_this_week(WEEKLY_DATE_FILE):
+        print("⏭️ Тижневий дайджест цього тижня вже відправлявся.")
+        return
+    print("\n📊 Відправляю тижневий дайджест...")
+    try:
+        success = weekly_digest.send_weekly_digest()
+        if success:
+            mark_weekly_done(WEEKLY_DATE_FILE)
+            print("✅ Тижневий дайджест відправлено!")
+    except Exception as e:
+        print(f"❌ Помилка тижневого дайджесту: {type(e).__name__}: {e}")
 
 def send_evening_message():
     if was_task_done_today(EVENING_DATE_FILE):
@@ -290,8 +311,6 @@ def send_evening_message():
         print(f"❌ Помилка вечірнього повідомлення: {e}")
 
 def run_news_scout():
-    # 🌙 ЗАХИСТ ВІД НІЧНОГО ПАРСИНГУ
-    # ✅ UTC → Kyiv для надійності при переходах на літній/зимовий час
     current_hour = datetime.now(pytz.utc).astimezone(KYIV_TZ).hour
     if current_hour >= 22 or current_hour < 10:
         print(f"😴 Нічний режим ({current_hour}:00). Парсинг зупинено до 10:00.")
@@ -375,8 +394,6 @@ if __name__ == "__main__":
 
     print("🚀 CyberWheel стартував з хмарною пам'яттю!")
 
-    # ✅ ФІКС: при старті одразу перевіряємо чи треба щось зробити прямо зараз
-    # (захист від ситуації коли сервер перезапустився вдень і пропустив завдання)
     print("🔎 Перевірка пропущених завдань після старту...")
     check_scheduled_tasks()
 
@@ -386,7 +403,7 @@ if __name__ == "__main__":
     # Регулярний парсинг новин щогодини
     schedule.every(60).minutes.do(run_news_scout)
 
-    print("📅 Дайджест о 10:00, новини щогодини, вечірнє побажання о 22:00 (за Київським часом).")
+    print("📅 Розклад: дайджест 10:00 | новини щогодини | тижневий 21:45 нед | добраніч 22:00")
 
     while True:
         schedule.run_pending()
