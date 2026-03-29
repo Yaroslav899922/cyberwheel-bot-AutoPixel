@@ -40,7 +40,7 @@ def summarize_text(article_text, original_title, is_morning=False):
     2. {greeting_instruction}
     3. Зроби аналіз тексту. Текст може бути англійською — обов'язково переклади.
     
-    ФОРМАТ ВІДПОВІДІ (СУВОРО ДОТРИМУЙСЯ, НЕ ВИКОРИСТОВУЙ HTML ТЕГИ b ТА i ВРУЧНУ):
+    ФОРМАТ ВІДПОВІДІ (СУВОРО ДОТРИМУЙСЯ, НЕ ВИКОРИСТОВУЙ БУДЬ-ЯКІ HTML ТЕГИ ВРУЧНУ):
     [TITLE]: (тут український заголовок)
     
     📌 Суть: (1-2 речення — коротко про що стаття)
@@ -49,10 +49,10 @@ def summarize_text(article_text, original_title, is_morning=False):
     Якщо доречно — одна нативна згадка конкретної моделі Škoda. 
     ЗАБОРОНЕНО: довгі міркування, філософські паралелі, повтор фактів зі статті.)
 
-    Після вердикту — ЗАВЖДИ одне коротке питання від Агента Софії особисто, конкретне по темі статті. 
-    Формат питання: починай з тегу <i> і закінчуй тегом </i>.
-    Приклади стилю: "<i>А ви б обрали електро чи бензин? Пишіть 👇</i>". 
+    Після вердикту — ЗАВЖДИ одне коротке питання від Агента Софії особисто, конкретне по темі статті.
     Питання має природно випливати з теми статті і бути цікавим для аудиторії автосалону.
+    Формат питання: обов'язково починай з текстового маркера [QUESTION]:
+    Приклад: "[QUESTION]: А ви б обрали електро чи бензин? Пишіть 👇"
 
     ТЕКСТ: {article_text_trimmed}
     """
@@ -72,6 +72,7 @@ def summarize_text(article_text, original_title, is_morning=False):
             cleaned_text = re.sub(r'\*\*(.*?)\*\*', r'\1', raw_text) # прибираємо маркдаун
             cleaned_text = re.sub(r'</?b>', '', cleaned_text, flags=re.IGNORECASE)
             cleaned_text = re.sub(r'</?strong>', '', cleaned_text, flags=re.IGNORECASE)
+            cleaned_text = re.sub(r'</?i>', '', cleaned_text, flags=re.IGNORECASE)
 
             # 2. Форматуємо списки
             cleaned_text = cleaned_text.replace('\n* ', '\n• ')
@@ -105,8 +106,30 @@ def summarize_text(article_text, original_title, is_morning=False):
                 models_pattern = r'(?i)\b(Fabia|Scala|Octavia|Superb|Kamiq|Karoq|Kodiaq|Enyaq)\b'
                 cleaned_text = re.sub(models_pattern, r'<b>\1</b>', cleaned_text)
 
-            # 5. Прибираємо можливі артефакти Gemini (якщо модель додає системний текст в кінці)
+            # 5. Прибираємо можливі артефакти Gemini
             cleaned_text = re.sub(r'СЦЕНАРІЙ\s+\d+.*$', '', cleaned_text, flags=re.DOTALL).strip()
+
+            # 6. Надійний спойлер через [QUESTION]: маркер (з логуванням)
+            if "[QUESTION]:" in cleaned_text:
+                parts = cleaned_text.split("[QUESTION]:", 1)
+                main_text = parts[0].strip()
+                question_text = parts[1].strip()
+
+                verdict_marker = "<b>Вердикт Агента Софії:</b>"
+                if verdict_marker in main_text:
+                    v_parts = main_text.split(verdict_marker, 1)
+                    before_verdict = v_parts[0]
+                    verdict_text = v_parts[1].strip()
+                    cleaned_text = (
+                        f"{before_verdict}{verdict_marker}\n"
+                        f"<tg-spoiler>{verdict_text}</tg-spoiler>\n\n"
+                        f"<i>{question_text}</i>"
+                    )
+                else:
+                    print("⚠️ Увага: не знайдено заголовок Вердикту — спойлер не застосовано.")
+                    cleaned_text = f"{main_text}\n\n<i>{question_text}</i>"
+            else:
+                print("⚠️ Увага: ШІ не згенерував маркер [QUESTION]: — спойлер не застосовано.")
 
             print(f"✅ Модель {m} відповіла успішно.")
             return cleaned_text
