@@ -73,6 +73,36 @@ def save_processed_url(url):
 def cleanup_old_urls(max_lines=2000):
     pass
 
+# ── 🆕 СЕМАНТИЧНИЙ ФІЛЬТР ДУБЛІКАТІВ ЗАГОЛОВКІВ (REDIS) ──────────────────────
+def get_normalized_title(title):
+    """Створює 'відбиток' заголовка: нижній регістр, тільки літери і цифри, 50 символів."""
+    if not title:
+        return ""
+    t = title.lower()
+    t = re.sub(r'[^\w\sа-яёіїєґ]', '', t)   # прибираємо розділові знаки
+    t = re.sub(r'\s+', '', t)               # прибираємо зайві пробіли повністю для щільного ключа
+    return t[:50]
+
+def is_title_duplicate(title):
+    """Перевіряє, чи є такий відбиток у Redis."""
+    fingerprint = get_normalized_title(title)
+    if not fingerprint:
+        return False
+    key = f"title:{fingerprint}"
+    result = _redis(["GET", key])
+    # Якщо результат є і він не None, значить такий заголовок вже був
+    if result and result.get("result") is not None:
+        return True
+    return False
+
+def save_title_fingerprint(title):
+    """Зберігає відбиток у Redis на 7 днів (604800 секунд)."""
+    fingerprint = get_normalized_title(title)
+    if fingerprint:
+        key = f"title:{fingerprint}"
+        _redis(["SET", key, "1", "EX", "604800"])
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── КОНТРОЛЕРИ ЧАСУ (КИЇВ) ТА ЗАВДАНЬ ────────────────────────────────────────
 def was_task_done_today(filename):
     if not os.path.exists(filename):
@@ -80,7 +110,6 @@ def was_task_done_today(filename):
     with open(filename, "r") as f:
         return f.read().strip() == get_today_kyiv()
 
-# 🆕 Маркер тижневого дайджесту — зберігає ISO-тиждень (рік+номер тижня)
 def was_weekly_done_this_week(filename):
     if not os.path.exists(filename):
         return False
@@ -99,15 +128,12 @@ def mark_task_done(filename):
         f.write(get_today_kyiv())
 
 def check_scheduled_tasks():
-    """Контролер завдань: перевіряє Київський час і виконує їх по черзі."""
     now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
 
-    # 1. Дайджест "Добрий ранок" о 10:00
     if now.hour == 10 and now.minute >= 0 and not was_task_done_today(DIGEST_DATE_FILE):
         send_morning_digest()
         return
 
-    # 2. Перша порція новин о 10:30
     if (now.hour > 10 or (now.hour == 10 and now.minute >= 30)) \
             and not was_task_done_today(MORNING_SCOUT_FILE):
         if now.hour < 22:
@@ -116,13 +142,11 @@ def check_scheduled_tasks():
             run_news_scout()
             return
 
-    # 3. 🆕 Тижневий дайджест — тільки неділя о 21:45
     if now.weekday() == 6 and now.hour == 21 and now.minute >= 45 \
             and not was_weekly_done_this_week(WEEKLY_DATE_FILE):
         send_weekly_digest()
         return
 
-    # 4. Вечірнє побажання о 22:00
     if now.hour == 22 and now.minute >= 0 and not was_task_done_today(EVENING_DATE_FILE):
         send_evening_message()
         return
@@ -148,7 +172,6 @@ RSS_STOP_WORDS_WHOLE = [
 ]
 
 def is_rss_title_relevant(title):
-    """Фільтр нерелевантних RSS статей по заголовку."""
     title_lower = title.lower()
     for word in RSS_STOP_WORDS_EXACT:
         if word in title_lower:
@@ -161,7 +184,6 @@ def is_rss_title_relevant(title):
     return True
 
 def is_entry_recent(entry):
-    """Дозволяє статті за сьогодні та вчора."""
     now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
     allowed_dates = [
         now.strftime("%Y-%m-%d"),
@@ -186,10 +208,6 @@ def is_entry_recent(entry):
         return True
 
 def smart_sleep(seconds):
-    """
-    Спить вказаний час, але переривається якщо настає 22:00.
-    False = паузу перервано, True = пауза пройшла успішно.
-    """
     end_time = time.time() + seconds
     while time.time() < end_time:
         if datetime.now(pytz.utc).astimezone(KYIV_TZ).hour >= 22:
@@ -203,10 +221,10 @@ def process_and_send(data, url, processed_urls):
 
     if "[TITLE]:" in raw_summary:
         parts     = raw_summary.split("[TITLE]:", 1)[1].split("\n", 1)
-        ua_title  = parts[0].strip()                          # 🆕 зберігаємо заголовок
+        ua_title  = parts[0].strip()
         final_msg = f"⚡️ <b>{ua_title.upper()}</b>\n\n{parts[1].strip()}"
     else:
-        ua_title  = data['title']                             # 🆕 fallback на оригінал
+        ua_title  = data['title']
         final_msg = raw_summary
 
     source_link  = f"\n\n<a href='{url}'><b>Читати повністю →</b></a>" if url else ""
@@ -229,7 +247,9 @@ def process_and_send(data, url, processed_urls):
         processed_urls.add(url)
         print(f"✅ Збережено в хмарну базу: {url[:60]}...")
 
-        # 🆕 Зберігаємо заголовок у тижневий список
+        # 🆕 Зберігаємо 'відбиток' оригінального англійського заголовка в Redis на 7 днів
+        save_title_fingerprint(data.get('title', ''))
+
         weekly_digest.add_headline_to_weekly(ua_title, url)
 
         pause_seconds = random.randint(300, 420)
@@ -256,7 +276,6 @@ def send_morning_digest():
     except Exception as e:
         print(f"❌ Помилка дайджесту: {type(e).__name__}: {e}")
 
-# 🆕 Відправка тижневого дайджесту
 def send_weekly_digest():
     if was_weekly_done_this_week(WEEKLY_DATE_FILE):
         print("⏭️ Тижневий дайджест цього тижня вже відправлявся.")
@@ -311,7 +330,6 @@ def send_evening_message():
         print(f"❌ Помилка вечірнього повідомлення: {e}")
 
 def run_news_scout():
-    # ✅ FIX: Заборона парсингу до 10:30 — звільняємо час для ранкового дайджесту о 10:00
     now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
     if now.hour >= 22 or now.hour < 10 or (now.hour == 10 and now.minute < 30):
         print(f"😴 Нічний режим або очікування 10:30 ({now.strftime('%H:%M')}). Парсинг зупинено.")
@@ -354,6 +372,14 @@ def run_news_scout():
         print(f"   Нових (за 2 дні): {len(new_entries)}")
 
         for entry in new_entries[:5]:
+            
+            # 🆕 ПЕРЕВІРКА НА ДУБЛІКАТ ДО ТОГО, ЯК ЙТИ НА САЙТ ТА У GEMINI
+            if is_title_duplicate(getattr(entry, 'title', '')):
+                print(f"⏭️ Дублікат по семантиці (пропускаємо): {entry.title[:60]}")
+                save_processed_url(entry.link)
+                processed_urls.add(entry.link)
+                continue
+            
             data = main.fetch_article_data(entry.link)
 
             if not data or not data.get('text'):
