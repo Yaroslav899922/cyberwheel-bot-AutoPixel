@@ -311,9 +311,10 @@ def send_evening_message():
         print(f"❌ Помилка вечірнього повідомлення: {e}")
 
 def run_news_scout():
-    current_hour = datetime.now(pytz.utc).astimezone(KYIV_TZ).hour
-    if current_hour >= 22 or current_hour < 10:
-        print(f"😴 Нічний режим ({current_hour}:00). Парсинг зупинено до 10:00.")
+    # ✅ FIX: Заборона парсингу до 10:30 — звільняємо час для ранкового дайджесту о 10:00
+    now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
+    if now.hour >= 22 or now.hour < 10 or (now.hour == 10 and now.minute < 30):
+        print(f"😴 Нічний режим або очікування 10:30 ({now.strftime('%H:%M')}). Парсинг зупинено.")
         return
 
     today          = get_today_kyiv()
