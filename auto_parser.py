@@ -219,6 +219,11 @@ def smart_sleep(seconds):
 def process_and_send(data, url, processed_urls):
     raw_summary = brain.summarize_text(data['text'], data['title'])
 
+    # 🆕 Блок-захист від публікації помилок
+    if raw_summary == "⚠️ Помилка ШІ.":
+        print(f"⚠️ Всі моделі ШІ зайняті. Відкладаємо статтю на наступний запуск: {url}")
+        return False  # Перериваємо процес, посилання не збережеться як оброблене
+
     if "[TITLE]:" in raw_summary:
         parts     = raw_summary.split("[TITLE]:", 1)[1].split("\n", 1)
         ua_title  = parts[0].strip()
@@ -407,7 +412,7 @@ def run_news_scout():
             if data and data.get('text'):
                 print(f"🆕 RSS: {entry.title[:60]}")
                 if not process_and_send(data, entry.link, processed_urls):
-                    return
+                    return  # <--- Якщо всі моделі лягли, парсинг зупиниться і спробує наново через годину
             else:
                 print(f"⏭️ Не вдалось отримати текст — пропускаємо: {entry.link[:60]}")
                 save_processed_url(entry.link)
