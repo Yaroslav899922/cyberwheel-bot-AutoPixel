@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import time
 from google import genai
 from dotenv import load_dotenv
 
@@ -63,7 +64,7 @@ def summarize_text(article_text, original_title, is_morning=False):
         'gemini-flash-latest'
     ]
 
-    for m in models:
+    for i, m in enumerate(models):
         try:
             response = client.models.generate_content(model=m, contents=prompt)
             raw_text = response.text
@@ -134,6 +135,10 @@ def summarize_text(article_text, original_title, is_morning=False):
 
         except Exception as e:
             print(f"⚠️ Модель {m} не відповіла: {e}")
+            # Пауза тільки якщо: 1) є ще моделі в черзі, 2) причина — перевантаження Google
+            if i < len(models) - 1 and ("503" in str(e) or "UNAVAILABLE" in str(e)):
+                print("⏳ Сервери перевантажені. Чекаємо 10 секунд перед наступною спробою...")
+                time.sleep(10)
             continue
 
     return "⚠️ Помилка ШІ."
