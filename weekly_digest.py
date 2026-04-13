@@ -14,7 +14,7 @@ REDIS_URL   = os.getenv("UPSTASH_REDIS_REST_URL")
 REDIS_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 
 WEEKLY_KEY  = "weekly_headlines"   # Redis LIST: "заголовок||url"
-MAX_STORED  = 100                  # Максимум записів у списку (≈3 тижні)
+MAX_STORED  = 200                  # Збільшено: ~4 тижні при активній роботі
 
 MONTHS_UA = {
     1: "січня",   2: "лютого",  3: "березня",  4: "квітня",
@@ -53,88 +53,204 @@ def add_headline_to_weekly(title: str, url: str):
     if not title or not url:
         return
 
-    # Нормалізуємо заголовок: прибираємо HTML-теги та зайві пробіли
     clean_title = re.sub(r"<[^>]+>", "", title).strip()
-    # Обрізаємо до 80 символів — достатньо для Gemini і компактно в Redis
     clean_title = clean_title[:80]
 
     entry = f"{clean_title}||{url}"
 
-    # Додаємо в кінець списку
     _redis(["RPUSH", WEEKLY_KEY, entry])
-
-    # Обрізаємо до MAX_STORED записів (зберігаємо тільки останні 100)
     _redis(["LTRIM", WEEKLY_KEY, -MAX_STORED, -1])
 
     print(f"📝 [WeeklyDigest] Збережено заголовок: {clean_title[:50]}...")
 
-# ── ДІАПАЗОН ДАТ ──────────────────────────────────────────────────────────────
-def get_week_range_label() -> str:
-    """
-    Повертає рядок діапазону дат для заголовку дайджесту.
-    Приклади:
-      "23–29 березня"
-      "28 березня – 3 квітня"
-    """
-    now   = datetime.now(pytz.utc).astimezone(KYIV_TZ)
-    end   = now
-    start = now - timedelta(days=6)
+# ── СИСТЕМА ПРІОРИТЕТІВ ───────────────────────────────────────────────────────
+#
+# Заголовки зберігаються УКРАЇНСЬКОЮ (ua_title після перекладу Gemini).
+#
+# Пріоритети (погоджено):
+#   +10  Škoda / моделі Škoda — завжди в дайджест якщо є
+#   +10  Ринок/продажі/статистика УКРАЇНИ — рівень Škoda, обов'язково
+#   +5   Електромобілі / нові технології
+#   +4   Рекорди / прориви
+#   +3   Ринок/продажі/статистика (не Україна)
+#   +2   Ціни/акції УКРАЇНИ
+#   -1   Ціни/акції НЕ України — виключаємо з дайджесту повністю
+# ─────────────────────────────────────────────────────────────────────────────
 
-    if start.month == end.month:
-        return f"{start.day}–{end.day} {MONTHS_UA[end.month]}"
-    else:
-        return f"{start.day} {MONTHS_UA[start.month]} – {end.day} {MONTHS_UA[end.month]}"
+UKRAINE_KEYWORDS = ["україн", "вітчизн", "київ", "українськ"]
 
-# ── ОТРИМАННЯ ЗАГОЛОВКІВ З REDIS ──────────────────────────────────────────────
-def get_weekly_headlines() -> list[dict]:
+SKODA_KEYWORDS = [
+    "škoda", "skoda", "шкода",
+    "fabia", "фабія", "scala", "скала",
+    "octavia", "октавія", "superb", "суперб",
+    "kamiq", "камік", "karoq", "карок",
+    "kodiaq", "кодіак", "enyaq", "еняк",
+]
+
+EV_KEYWORDS = [
+    "електр", "гібрид", "hybrid", "батаре",
+    "заряд", "технолог", "безпілот", "автопілот",
+]
+
+RECORD_KEYWORDS = [
+    "рекорд", "найшвидш", "перший", "вперше",
+    "прорив", "рекордн", "світовий",
+]
+
+MARKET_KEYWORDS = [
+    "продаж", "ринок", "статистик", "рейтинг",
+    "закон", "правил", "реєстрац", "імпорт",
+]
+
+PRICE_KEYWORDS = [
+    "цін", "знижк", "акці", "дешевш",
+    "знизи", "підвищи", "вартіст", "ціноутворен",
+]
+
+
+def score_headline(title: str) -> int:
     """
-    Повертає список словників: [{"title": ..., "url": ...}, ...]
-    Бере всі записи з Redis LIST weekly_headlines.
+    Повертає числовий пріоритет заголовку за погодженою системою балів.
+    Повертає -1 для статей які потрібно повністю виключити з дайджесту.
     """
-    result = _redis(["LRANGE", WEEKLY_KEY, "0", "-1"])
-    if not result or "result" not in result:
-        print("⚠️ [WeeklyDigest] Redis недоступний або список порожній.")
-        return []
+    t = title.lower()
 
-    headlines = []
-    for entry in result["result"]:
-        if "||" in entry:
-            parts = entry.split("||", 1)
-            headlines.append({"title": parts[0].strip(), "url": parts[1].strip()})
-        else:
-            headlines.append({"title": entry.strip(), "url": ""})
+    is_ukraine = any(kw in t for kw in UKRAINE_KEYWORDS)
+    is_skoda   = any(kw in t for kw in SKODA_KEYWORDS)
+    is_price   = any(kw in t for kw in PRICE_KEYWORDS)
+    is_market  = any(kw in t for kw in MARKET_KEYWORDS)
 
-    print(f"📋 [WeeklyDigest] Знайдено заголовків: {len(headlines)}")
-    return headlines
+    # Ціни/акції не про Україну і не про Škoda — виключаємо повністю
+    if is_price and not is_ukraine and not is_skoda:
+        return -1
 
-# ── GEMINI: ВИБІР ТОП-5 ───────────────────────────────────────────────────────
-def pick_top5_with_gemini(headlines: list[dict]) -> list[dict] | None:
+    score = 0
+
+    # Škoda → +10
+    if is_skoda:
+        score += 10
+
+    # Ринок України → +10 (рівень Škoda, обов'язково)
+    if is_ukraine and is_market:
+        score += 10
+
+    # Електро / технології → +5
+    if any(kw in t for kw in EV_KEYWORDS):
+        score += 5
+
+    # Рекорди / прориви → +4
+    if any(kw in t for kw in RECORD_KEYWORDS):
+        score += 4
+
+    # Ринок/продажі (не Україна) → +3
+    if is_market:
+        score += 3
+
+    # Ціни/акції України → +2
+    if is_price and is_ukraine:
+        score += 2
+
+    return score
+
+
+def deduplicate_headlines(headlines: list[dict]) -> list[dict]:
     """
-    Передає список заголовків у Gemini.
-    Gemini повертає JSON з топ-5 індексами та коротким поясненням.
-    Повертає список з 5 словників: [{"title": ..., "url": ..., "why": ...}, ...]
+    Прибирає дублікати тем зі списку тижневих заголовків.
+    Якщо два заголовки мають ≥3 спільних значущих слова — залишає перший.
+    """
+    accepted = []
+    accepted_word_sets = []
+
+    for h in headlines:
+        words = {
+            w for w in re.sub(r'[^\w\s]', ' ', h['title'].lower()).split()
+            if len(w) > 3
+        }
+
+        is_dup = False
+        for existing_words in accepted_word_sets:
+            if len(words & existing_words) >= 3:
+                is_dup = True
+                break
+
+        if not is_dup:
+            accepted.append(h)
+            accepted_word_sets.append(words)
+
+    print(f"🔍 [WeeklyDigest] Після дедублікації: {len(accepted)} з {len(headlines)}")
+    return accepted
+
+
+def prefilter_headlines(headlines: list[dict]) -> list[dict]:
+    """
+    Підготовка списку для Gemini:
+    1. Прибираємо дублікати тем
+    2. Виставляємо бали за пріоритетами
+    3. Виключаємо статті з балом -1 (ціни не-України)
+    4. Повертаємо топ-30 за балами — саме їх отримає Gemini
+    """
+    # Крок 1: дедублікація
+    unique = deduplicate_headlines(headlines)
+
+    # Крок 2: оцінка + фільтрація виключень
+    scored = []
+    excluded = 0
+    for h in unique:
+        s = score_headline(h['title'])
+        if s == -1:
+            excluded += 1
+            continue
+        scored.append((s, h))
+
+    print(f"🚫 [WeeklyDigest] Виключено нерелевантних (ціни не-України): {excluded}")
+
+    # Крок 3: сортуємо за балами — найважливіші першими
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Крок 4: беремо топ-30
+    top30 = [h for _, h in scored[:30]]
+
+    print(f"📊 [WeeklyDigest] Передаємо Gemini топ-{len(top30)} (з {len(unique)} унікальних)")
+
+    # Показуємо розподіл балів для діагностики
+    for score, h in scored[:10]:
+        print(f"   [{score:+d}] {h['title'][:60]}")
+
+    return top30
+
+
+# ── GEMINI: ВИБІР ТОП-7 ───────────────────────────────────────────────────────
+def pick_top7_with_gemini(headlines: list[dict]) -> list[dict] | None:
+    """
+    Передає попередньо відфільтрований список у Gemini.
+    Gemini робить фінальний вибір з топ-30 і повертає 7 найкращих.
     """
     if not headlines:
         return None
 
-    # Формуємо нумерований список для промпту
     numbered = "\n".join(
         f"{i+1}. {h['title']}" for i, h in enumerate(headlines)
     )
 
     prompt = f"""Ти — Агент Софія, аналітик автомобільного каналу Skoda_Kremen_News.
-Ось список заголовків новин за тиждень:
+Ось попередньо відібрані найважливіші новини тижня:
 
 {numbered}
 
 ЗАВДАННЯ:
-Обери рівно 5 найважливіших новин для аудиторії українського автосалону Škoda.
+Обери рівно 7 найважливіших новин для аудиторії українського автосалону Škoda.
 
-ПРІОРИТЕТИ при виборі (в порядку важливості):
-1. Новини про бренд Škoda або моделі Fabia, Scala, Octavia, Superb, Kamiq, Karoq, Kodiaq, Enyaq
-2. Тренди електромобілів та нових технологій
-3. Значні події автомобільного ринку (продажі, рейтинги, закони)
-4. Цікаві новинки від ключових конкурентів
+ПРІОРИТЕТИ при виборі (суворо в порядку важливості):
+1. Новини про бренд Škoda або моделі Fabia, Scala, Octavia, Superb, Kamiq, Karoq, Kodiaq, Enyaq — ОБОВ'ЯЗКОВО якщо є
+2. Новини про автомобільний ринок України (продажі, закони, статистика) — ОБОВ'ЯЗКОВО якщо є, це рівень Škoda
+3. Тренди електромобілів та нових технологій
+4. Рекорди та значні технічні досягнення
+5. Важливі події світового авторинку
+
+ДОДАТКОВІ ПРАВИЛА:
+- Забезпечи різноманітність — не більше 2 новин однієї категорії
+- НЕ обирай ціни/акції якщо вони не стосуються України або Škoda
+- Перевага новинам які будуть цікаві покупцям авто в Україні
 
 ФОРМАТ ВІДПОВІДІ — ТІЛЬКИ ВАЛІДНИЙ JSON, БЕЗ ЗАЙВИХ СЛІВ:
 [
@@ -142,17 +258,17 @@ def pick_top5_with_gemini(headlines: list[dict]) -> list[dict] | None:
   {{"index": 7, "why": "коротко чому важливо — 1 речення"}},
   {{"index": 1, "why": "коротко чому важливо — 1 речення"}},
   {{"index": 12, "why": "коротко чому важливо — 1 речення"}},
-  {{"index": 5, "why": "коротко чому важливо — 1 речення"}}
+  {{"index": 5, "why": "коротко чому важливо — 1 речення"}},
+  {{"index": 9, "why": "коротко чому важливо — 1 речення"}},
+  {{"index": 2, "why": "коротко чому важливо — 1 речення"}}
 ]
 
-ПРАВИЛА:
+ПРАВИЛА ФОРМАТУ:
 - index — це номер з наведеного списку (починається з 1)
 - "why" — просте речення БЕЗ канцеляризмів та пафосу
-- Якщо є новини про Škoda — вони ОБОВ'ЯЗКОВО в списку
-- Рівно 5 елементів, не більше і не менше
+- Рівно 7 елементів, не більше і не менше
 """
 
-    # ✅ Той самий fallback що і в brain.py
     models = [
         "gemini-flash-lite-latest",
         "gemini-3.1-flash-lite-preview",
@@ -166,15 +282,13 @@ def pick_top5_with_gemini(headlines: list[dict]) -> list[dict] | None:
                 contents=prompt
             )
             raw = response.text.strip()
-
-            # Прибираємо можливі markdown-огорожі
             raw = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
 
-            top5_indices = _json.loads(raw)
+            top7_indices = _json.loads(raw)
 
             result = []
-            for item in top5_indices:
-                idx = item.get("index", 0) - 1  # перетворюємо на 0-based
+            for item in top7_indices:
+                idx = item.get("index", 0) - 1
                 if 0 <= idx < len(headlines):
                     result.append({
                         "title": headlines[idx]["title"],
@@ -182,11 +296,11 @@ def pick_top5_with_gemini(headlines: list[dict]) -> list[dict] | None:
                         "why":   item.get("why", "").strip()
                     })
 
-            if len(result) == 5:
-                print(f"✅ [WeeklyDigest] Модель {m} обрала топ-5 успішно.")
+            if len(result) == 7:
+                print(f"✅ [WeeklyDigest] Модель {m} обрала топ-7 успішно.")
                 return result
             else:
-                print(f"⚠️ [WeeklyDigest] Модель {m} повернула {len(result)} замість 5.")
+                print(f"⚠️ [WeeklyDigest] Модель {m} повернула {len(result)} замість 7.")
                 continue
 
         except Exception as e:
@@ -196,18 +310,18 @@ def pick_top5_with_gemini(headlines: list[dict]) -> list[dict] | None:
     print("❌ [WeeklyDigest] Всі моделі недоступні.")
     return None
 
+
 # ── GEMINI: ВЕРДИКТ ───────────────────────────────────────────────────────────
-def get_weekly_verdict(top5: list[dict]) -> str:
+def get_weekly_verdict(top7: list[dict]) -> str:
     """
-    Генерує загальний висновок Агента Софії про тиждень.
-    Простою мовою, без заумних слів.
+    Генерує загальний висновок Агента Софії про тиждень на основі топ-7.
     """
-    titles_str = "\n".join(f"- {item['title']}" for item in top5)
+    titles_str = "\n".join(f"- {item['title']}" for item in top7)
 
     prompt = f"""Ти — Агент Софія, аналітик автомобільного каналу Skoda_Kremen_News.
 Пиши від жіночого роду ("я проаналізувала", "вважаю").
 
-Ось 5 головних автоновин цього тижня:
+Ось 7 головних автоновин цього тижня:
 {titles_str}
 
 ЗАВДАННЯ: Напиши короткий загальний висновок про тиждень (2-3 речення).
@@ -221,7 +335,6 @@ def get_weekly_verdict(top5: list[dict]) -> str:
 - ТІЛЬКИ текст вердикту, без заголовків та підписів
 """
 
-    # ✅ Той самий fallback що і в brain.py
     models = [
         "gemini-flash-lite-latest",
         "gemini-3.1-flash-lite-preview",
@@ -244,6 +357,38 @@ def get_weekly_verdict(top5: list[dict]) -> str:
 
     return "Цього тижня автосвіт не стояв на місці — попереду ще цікавіше."
 
+
+# ── ДІАПАЗОН ДАТ ──────────────────────────────────────────────────────────────
+def get_week_range_label() -> str:
+    now   = datetime.now(pytz.utc).astimezone(KYIV_TZ)
+    end   = now
+    start = now - timedelta(days=6)
+
+    if start.month == end.month:
+        return f"{start.day}–{end.day} {MONTHS_UA[end.month]}"
+    else:
+        return f"{start.day} {MONTHS_UA[start.month]} – {end.day} {MONTHS_UA[end.month]}"
+
+
+# ── ОТРИМАННЯ ЗАГОЛОВКІВ З REDIS ──────────────────────────────────────────────
+def get_weekly_headlines() -> list[dict]:
+    result = _redis(["LRANGE", WEEKLY_KEY, "0", "-1"])
+    if not result or "result" not in result:
+        print("⚠️ [WeeklyDigest] Redis недоступний або список порожній.")
+        return []
+
+    headlines = []
+    for entry in result["result"]:
+        if "||" in entry:
+            parts = entry.split("||", 1)
+            headlines.append({"title": parts[0].strip(), "url": parts[1].strip()})
+        else:
+            headlines.append({"title": entry.strip(), "url": ""})
+
+    print(f"📋 [WeeklyDigest] Знайдено заголовків: {len(headlines)}")
+    return headlines
+
+
 # ── ЗБІРКА ПОВІДОМЛЕННЯ ───────────────────────────────────────────────────────
 def build_weekly_digest_message() -> str | None:
     """
@@ -252,28 +397,33 @@ def build_weekly_digest_message() -> str | None:
     """
     headlines = get_weekly_headlines()
 
-    if len(headlines) < 5:
-        print(f"⚠️ [WeeklyDigest] Замало заголовків ({len(headlines)}) — потрібно мінімум 5.")
+    if len(headlines) < 7:
+        print(f"⚠️ [WeeklyDigest] Замало заголовків ({len(headlines)}) — потрібно мінімум 7.")
         return None
 
-    top5 = pick_top5_with_gemini(headlines)
-    if not top5:
-        print("❌ [WeeklyDigest] Gemini не зміг обрати топ-5.")
+    # Передфільтрація: дедублікація + бали + топ-30 для Gemini
+    filtered = prefilter_headlines(headlines)
+
+    if len(filtered) < 7:
+        print(f"⚠️ [WeeklyDigest] Після фільтрації залишилось {len(filtered)} — замало.")
         return None
 
-    verdict  = get_weekly_verdict(top5)
+    top7 = pick_top7_with_gemini(filtered)
+    if not top7:
+        print("❌ [WeeklyDigest] Gemini не зміг обрати топ-7.")
+        return None
+
+    verdict    = get_weekly_verdict(top7)
     date_range = get_week_range_label()
 
-    EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+    EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
 
-    # Формуємо список новин
     news_lines = []
-    for i, item in enumerate(top5):
+    for i, item in enumerate(top7):
         title = item["title"]
         url   = item["url"]
         why   = item["why"]
 
-        # Назва статті як посилання — жирна і клікабельна
         if url:
             title_html = f'<b><a href="{url}">{title}</a></b>'
         else:
@@ -291,7 +441,7 @@ def build_weekly_digest_message() -> str | None:
     )
 
     message = (
-        f"🏆 <b>ТОП-5 НОВИН ТИЖНЯ</b>\n"
+        f"🏆 <b>ТОП-7 НОВИН ТИЖНЯ</b>\n"
         f"<i>Агент Софія підготувала головне за {date_range}</i>\n"
         f"━━━━━━━━━━━━━━━━━━\n\n"
         f"{news_block}\n\n"
@@ -302,18 +452,15 @@ def build_weekly_digest_message() -> str | None:
         f"{social_links}"
     )
 
-    # Після відправки — очищаємо список для наступного тижня
+    # Після збірки — очищаємо список для наступного тижня
     _redis(["DEL", WEEKLY_KEY])
     print(f"🗑️ [WeeklyDigest] Redis-список {WEEKLY_KEY} очищено для наступного тижня.")
 
     return message
 
+
 # ── ВІДПРАВКА ─────────────────────────────────────────────────────────────────
 def send_weekly_digest() -> bool:
-    """
-    Збирає і відправляє тижневий дайджест у Telegram.
-    Повертає True при успіху.
-    """
     print("\n📊 Збираю тижневий дайджест...")
     message = build_weekly_digest_message()
 
@@ -330,14 +477,13 @@ def send_weekly_digest() -> bool:
 
     return success
 
+
 # ── ТЕСТ ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("🧪 Тестую weekly_digest.py...\n")
 
-    # Тест діапазону дат
     print(f"📅 Діапазон: {get_week_range_label()}\n")
 
-    # Тест з тестовими даними
     test_headlines = [
         {"title": "Škoda Kodiaq 2025 отримав новий двигун", "url": "https://example.com/1"},
         {"title": "Електромобілі в Україні: продажі зросли на 40%", "url": "https://example.com/2"},
@@ -346,18 +492,29 @@ if __name__ == "__main__":
         {"title": "Нові правила розмитнення авто в Україні", "url": "https://example.com/5"},
         {"title": "Škoda Enyaq оновив запас ходу до 600 км", "url": "https://example.com/6"},
         {"title": "BMW представила електричний M3", "url": "https://example.com/7"},
+        {"title": "Ford GT встановив рекорд Нюрбургрингу", "url": "https://example.com/8"},
+        {"title": "Honda знизила ціни на Prologue в США", "url": "https://example.com/9"},
+        {"title": "Ринок електромобілів України: підсумки кварталу", "url": "https://example.com/10"},
     ]
 
-    print(f"📋 Тестових заголовків: {len(test_headlines)}")
-    top5 = pick_top5_with_gemini(test_headlines)
+    print("📊 Тест системи балів:")
+    for h in test_headlines:
+        s = score_headline(h['title'])
+        marker = "🚫" if s == -1 else f"[{s:+d}]"
+        print(f"  {marker} {h['title']}")
 
-    if top5:
-        print("\n🏆 Топ-5 від Gemini:")
-        for i, item in enumerate(top5, 1):
+    print(f"\n📋 Тестових заголовків: {len(test_headlines)}")
+    filtered = prefilter_headlines(test_headlines)
+
+    top7 = pick_top7_with_gemini(filtered)
+
+    if top7:
+        print("\n🏆 Топ-7 від Gemini:")
+        for i, item in enumerate(top7, 1):
             print(f"  {i}. {item['title']}")
             print(f"     → {item['why']}")
 
-        verdict = get_weekly_verdict(top5)
+        verdict = get_weekly_verdict(top7)
         print(f"\n💬 Вердикт:\n{verdict}")
     else:
         print("❌ Gemini не відповів")
