@@ -19,7 +19,7 @@ DB_FILE            = "parsed_urls.txt"
 DIGEST_DATE_FILE   = "last_digest_date.txt"
 EVENING_DATE_FILE  = "last_evening_date.txt"
 MORNING_SCOUT_FILE = "last_morning_scout.txt"
-WEEKLY_DATE_FILE   = "last_weekly_digest.txt"   # 🆕 Маркер тижневого дайджесту
+WEEKLY_DATE_FILE   = "last_weekly_digest.txt"
 KYIV_TZ            = pytz.timezone("Europe/Kiev")
 
 # ── REDIS (Upstash) ───────────────────────────────────────────────────────────
@@ -70,6 +70,18 @@ def save_processed_url(url):
     with open(DB_FILE, "a", encoding="utf-8") as f:
         f.write(url + "\n")
 
+def is_url_already_published(url):
+    """
+    Фінальна перевірка прямо перед відправкою — звертається до Redis в реальному часі.
+    Захищає від ситуації коли два екземпляри бота (під час деплою) одночасно
+    пройшли початкову перевірку і намагаються опублікувати одне й те саме.
+    """
+    result = _redis(["SISMEMBER", REDIS_KEY, url])
+    if result and result.get("result") == 1:
+        print(f"🛑 Фінальна перевірка: URL вже є в Redis — скасовуємо публікацію: {url[:60]}")
+        return True
+    return False
+
 def cleanup_old_urls(max_lines=2000):
     pass
 
@@ -91,9 +103,7 @@ def cleanup_old_urls(max_lines=2000):
 #   → перевіряємо: ford✓ gt✓ mk✓ nurburgring✓ → збіг 4 слова → ДУБЛІКАТ
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Слова які є в кожному автомобільному заголовку — не несуть унікальності теми
 TOPIC_STOP_WORDS = {
-    # Артиклі та службові слова англійської
     'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
     'has', 'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might',
     'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'into',
@@ -101,7 +111,6 @@ TOPIC_STOP_WORDS = {
     'which', 'how', 'why', 'what', 'when', 'where', 'who', 'than', 'all',
     'out', 'up', 'over', 'just', 'also', 'after', 'before', 'about', 'one',
     'two', 'can', 'us', 'uk', 'he', 'she', 'they', 'we', 'get', 'got',
-    # Типові авто-слова що є майже в кожній новині — не допомагають розрізняти теми
     'car', 'cars', 'auto', 'vehicle', 'vehicles', 'model', 'new', 'first',
     'next', 'top', 'best', 'more', 'most', 'now', 'set', 'sets', 'get',
     'gets', 'via', 'its', 'here', 'says', 'than', 'off', 'own', 'per',
@@ -110,27 +119,17 @@ TOPIC_STOP_WORDS = {
 }
 
 def get_topic_words(title):
-    """
-    Витягує значущі слова з заголовку.
-    Повертає множину (set) слів довших за 2 символи, що не є стоп-словами.
-    """
     if not title:
         return set()
     t = title.lower()
-    # Прибираємо всі символи крім букв, цифр і пробілів
     t = re.sub(r'[^\w\s]', ' ', t)
     words = t.split()
     meaningful = {w for w in words if w not in TOPIC_STOP_WORDS and len(w) > 2}
     return meaningful
 
 def is_title_duplicate(title):
-    """
-    Перевіряє, чи є нова стаття дублікатом вже опублікованої теми.
-    Повертає True якщо ≥3 значущих слів вже зустрічались раніше.
-    """
     words = get_topic_words(title)
     if len(words) < 3:
-        # Заголовок занадто короткий — пропускаємо перевірку
         return False
 
     matches = 0
@@ -146,10 +145,6 @@ def is_title_duplicate(title):
     return False
 
 def save_title_fingerprint(title):
-    """
-    Зберігає кожне значуще слово заголовку в Redis на 7 днів.
-    Викликається тільки після успішної публікації.
-    """
     words = get_topic_words(title)
     if not words:
         return
@@ -272,6 +267,16 @@ def smart_sleep(seconds):
     return True
 
 def process_and_send(data, url, processed_urls):
+
+    # ── ФІНАЛЬНА ПЕРЕВІРКА перед відправкою ──────────────────────────────────
+    # Захист від деплою: якщо два екземпляри бота запустились одночасно,
+    # перший хто дійде до цієї точки — запише URL в Redis і відправить пост.
+    # Другий побачить що URL вже є і тихо зупиниться без повторної публікації.
+    if is_url_already_published(url):
+        processed_urls.add(url)
+        return True
+    # ─────────────────────────────────────────────────────────────────────────
+
     raw_summary = brain.summarize_text(data['text'], data['title'])
 
     if raw_summary == "⚠️ Помилка ШІ.":
@@ -306,7 +311,6 @@ def process_and_send(data, url, processed_urls):
         processed_urls.add(url)
         print(f"✅ Збережено в хмарну базу: {url[:60]}...")
 
-        # Зберігаємо ключові слова оригінального заголовку в Redis на 7 днів
         save_title_fingerprint(data.get('title', ''))
 
         weekly_digest.add_headline_to_weekly(ua_title, url)
@@ -432,7 +436,6 @@ def run_news_scout():
 
         for entry in new_entries[:5]:
 
-            # ПЕРЕВІРКА НА ДУБЛІКАТ ТЕМИ ДО ТОГО, ЯК ЙТИ НА САЙТ ТА У GEMINI
             if is_title_duplicate(getattr(entry, 'title', '')):
                 print(f"⏭️ Дублікат теми — пропускаємо: {entry.title[:60]}")
                 save_processed_url(entry.link)
