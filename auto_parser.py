@@ -73,34 +73,89 @@ def save_processed_url(url):
 def cleanup_old_urls(max_lines=2000):
     pass
 
-# ── 🆕 СЕМАНТИЧНИЙ ФІЛЬТР ДУБЛІКАТІВ ЗАГОЛОВКІВ (REDIS) ──────────────────────
-def get_normalized_title(title):
-    """Створює 'відбиток' заголовка: нижній регістр, тільки літери і цифри, 50 символів."""
+# ── СЕМАНТИЧНИЙ ФІЛЬТР ДУБЛІКАТІВ ПО КЛЮЧОВИХ СЛОВАХ ─────────────────────────
+#
+# Логіка:
+#   1. З заголовку витягуємо "значущі" слова — прибираємо загальні слова
+#      (артиклі, прийменники, типові авто-слова які є скрізь)
+#   2. Після публікації кожне значуще слово зберігається в Redis як
+#      окремий ключ "tw:{слово}" на 7 днів
+#   3. При перевірці нової статті — рахуємо скільки її слів вже є в Redis
+#   4. Якщо збіг ≥ 3 слів → це та сама тема → пропускаємо
+#
+# Приклад чому це працює:
+#   Опубліковано: "Ford GT Mk IV sets Nurburgring lap record"
+#   → зберігаємо: tw:ford, tw:gt, tw:mk, tw:nurburgring, tw:record, tw:lap
+#
+#   Нова стаття: "Ford GT Mk IV is third fastest car at Nurburgring"
+#   → перевіряємо: ford✓ gt✓ mk✓ nurburgring✓ → збіг 4 слова → ДУБЛІКАТ
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Слова які є в кожному автомобільному заголовку — не несуть унікальності теми
+TOPIC_STOP_WORDS = {
+    # Артиклі та службові слова англійської
+    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'has', 'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might',
+    'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'into',
+    'as', 'and', 'or', 'but', 'not', 'no', 'it', 'its', 'this', 'that',
+    'which', 'how', 'why', 'what', 'when', 'where', 'who', 'than', 'all',
+    'out', 'up', 'over', 'just', 'also', 'after', 'before', 'about', 'one',
+    'two', 'can', 'us', 'uk', 'he', 'she', 'they', 'we', 'get', 'got',
+    # Типові авто-слова що є майже в кожній новині — не допомагають розрізняти теми
+    'car', 'cars', 'auto', 'vehicle', 'vehicles', 'model', 'new', 'first',
+    'next', 'top', 'best', 'more', 'most', 'now', 'set', 'sets', 'get',
+    'gets', 'via', 'its', 'here', 'says', 'than', 'off', 'own', 'per',
+    'uk', 'us', 'eu', 'year', 'years', 'price', 'prices', 'cost', 'costs',
+    'makes', 'made', 'make', 'drive', 'drives', 'driven', 'test', 'review',
+}
+
+def get_topic_words(title):
+    """
+    Витягує значущі слова з заголовку.
+    Повертає множину (set) слів довших за 2 символи, що не є стоп-словами.
+    """
     if not title:
-        return ""
+        return set()
     t = title.lower()
-    t = re.sub(r'[^\w\sа-яёіїєґ]', '', t)   # прибираємо розділові знаки
-    t = re.sub(r'\s+', '', t)               # прибираємо зайві пробіли повністю для щільного ключа
-    return t[:50]
+    # Прибираємо всі символи крім букв, цифр і пробілів
+    t = re.sub(r'[^\w\s]', ' ', t)
+    words = t.split()
+    meaningful = {w for w in words if w not in TOPIC_STOP_WORDS and len(w) > 2}
+    return meaningful
 
 def is_title_duplicate(title):
-    """Перевіряє, чи є такий відбиток у Redis."""
-    fingerprint = get_normalized_title(title)
-    if not fingerprint:
+    """
+    Перевіряє, чи є нова стаття дублікатом вже опублікованої теми.
+    Повертає True якщо ≥3 значущих слів вже зустрічались раніше.
+    """
+    words = get_topic_words(title)
+    if len(words) < 3:
+        # Заголовок занадто короткий — пропускаємо перевірку
         return False
-    key = f"title:{fingerprint}"
-    result = _redis(["GET", key])
-    # Якщо результат є і він не None, значить такий заголовок вже був
-    if result and result.get("result") is not None:
-        return True
+
+    matches = 0
+    matched_words = []
+    for word in words:
+        result = _redis(["GET", f"tw:{word}"])
+        if result and result.get("result") is not None:
+            matches += 1
+            matched_words.append(word)
+            if matches >= 3:
+                print(f"🔁 Дублікат теми (слова: {matched_words}): {title[:60]}")
+                return True
     return False
 
 def save_title_fingerprint(title):
-    """Зберігає відбиток у Redis на 7 днів (604800 секунд)."""
-    fingerprint = get_normalized_title(title)
-    if fingerprint:
-        key = f"title:{fingerprint}"
-        _redis(["SET", key, "1", "EX", "604800"])
+    """
+    Зберігає кожне значуще слово заголовку в Redis на 7 днів.
+    Викликається тільки після успішної публікації.
+    """
+    words = get_topic_words(title)
+    if not words:
+        return
+    for word in words:
+        _redis(["SET", f"tw:{word}", "1", "EX", "604800"])
+    print(f"🔑 Збережено {len(words)} ключових слів теми: {', '.join(list(words)[:6])}")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── КОНТРОЛЕРИ ЧАСУ (КИЇВ) ТА ЗАВДАНЬ ────────────────────────────────────────
@@ -114,7 +169,7 @@ def was_weekly_done_this_week(filename):
     if not os.path.exists(filename):
         return False
     now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
-    current_week = now.strftime("%Y-W%W")   # наприклад "2026-W13"
+    current_week = now.strftime("%Y-W%W")
     with open(filename, "r") as f:
         return f.read().strip() == current_week
 
@@ -219,10 +274,9 @@ def smart_sleep(seconds):
 def process_and_send(data, url, processed_urls):
     raw_summary = brain.summarize_text(data['text'], data['title'])
 
-    # 🆕 Блок-захист від публікації помилок
     if raw_summary == "⚠️ Помилка ШІ.":
         print(f"⚠️ Всі моделі ШІ зайняті. Відкладаємо статтю на наступний запуск: {url}")
-        return False  # Перериваємо процес, посилання не збережеться як оброблене
+        return False
 
     if "[TITLE]:" in raw_summary:
         parts     = raw_summary.split("[TITLE]:", 1)[1].split("\n", 1)
@@ -252,7 +306,7 @@ def process_and_send(data, url, processed_urls):
         processed_urls.add(url)
         print(f"✅ Збережено в хмарну базу: {url[:60]}...")
 
-        # 🆕 Зберігаємо 'відбиток' оригінального англійського заголовка в Redis на 7 днів
+        # Зберігаємо ключові слова оригінального заголовку в Redis на 7 днів
         save_title_fingerprint(data.get('title', ''))
 
         weekly_digest.add_headline_to_weekly(ua_title, url)
@@ -377,14 +431,14 @@ def run_news_scout():
         print(f"   Нових (за 2 дні): {len(new_entries)}")
 
         for entry in new_entries[:5]:
-            
-            # 🆕 ПЕРЕВІРКА НА ДУБЛІКАТ ДО ТОГО, ЯК ЙТИ НА САЙТ ТА У GEMINI
+
+            # ПЕРЕВІРКА НА ДУБЛІКАТ ТЕМИ ДО ТОГО, ЯК ЙТИ НА САЙТ ТА У GEMINI
             if is_title_duplicate(getattr(entry, 'title', '')):
-                print(f"⏭️ Дублікат по семантиці (пропускаємо): {entry.title[:60]}")
+                print(f"⏭️ Дублікат теми — пропускаємо: {entry.title[:60]}")
                 save_processed_url(entry.link)
                 processed_urls.add(entry.link)
                 continue
-            
+
             data = main.fetch_article_data(entry.link)
 
             if not data or not data.get('text'):
@@ -412,7 +466,7 @@ def run_news_scout():
             if data and data.get('text'):
                 print(f"🆕 RSS: {entry.title[:60]}")
                 if not process_and_send(data, entry.link, processed_urls):
-                    return  # <--- Якщо всі моделі лягли, парсинг зупиниться і спробує наново через годину
+                    return
             else:
                 print(f"⏭️ Не вдалось отримати текст — пропускаємо: {entry.link[:60]}")
                 save_processed_url(entry.link)
@@ -429,10 +483,7 @@ if __name__ == "__main__":
     print("🔎 Перевірка пропущених завдань після старту...")
     check_scheduled_tasks()
 
-    # Запускаємо контролер кожні 5 хвилин
     schedule.every(5).minutes.do(check_scheduled_tasks)
-
-    # Регулярний парсинг новин щогодини
     schedule.every(60).minutes.do(run_news_scout)
 
     print("📅 Розклад: дайджест 10:00 | новини щогодини | тижневий 21:45 нед | добраніч 22:00")
