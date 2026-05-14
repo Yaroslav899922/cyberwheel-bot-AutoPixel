@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import main
 import brain
 import telegram_bot
+import facebook_bot            # 🆕 Facebook публікація
 import morning_digest
 import weekly_digest          # 🆕 Тижневий дайджест
 import config
@@ -295,6 +296,13 @@ def process_and_send(data, url, processed_urls):
         save_title_fingerprint(data.get('title', ''))
 
         weekly_digest.add_headline_to_weekly(ua_title, url)
+
+        # 🆕 Публікуємо на Facebook (паралельно, незалежно від результату)
+        facebook_bot.send_facebook_post(
+            message=final_msg,
+            image_url=data.get('image'),
+            source_url=url
+        )
 
         pause_seconds = random.randint(300, 420)
         print(f"⏳ Чекаю {pause_seconds // 60} хв {pause_seconds % 60} сек перед наступним постом...")
