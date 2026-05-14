@@ -17,10 +17,12 @@ import weekly_digest          # 🆕 Тижневий дайджест
 import config
 
 DB_FILE            = "parsed_urls.txt"
-DIGEST_DATE_FILE   = "last_digest_date.txt"
-EVENING_DATE_FILE  = "last_evening_date.txt"
-MORNING_SCOUT_FILE = "last_morning_scout.txt"
-WEEKLY_DATE_FILE   = "last_weekly_digest.txt"
+# Змінено на ключі для Redis замість текстових файлів
+DIGEST_DATE_KEY    = "last_digest_date"
+EVENING_DATE_KEY   = "last_evening_date"
+MORNING_SCOUT_KEY  = "last_morning_scout"
+WEEKLY_DATE_KEY    = "last_weekly_digest"
+
 KYIV_TZ            = pytz.timezone("Europe/Kiev")
 
 # ── REDIS (Upstash) ───────────────────────────────────────────────────────────
@@ -87,23 +89,6 @@ def cleanup_old_urls(max_lines=2000):
     pass
 
 # ── СЕМАНТИЧНИЙ ФІЛЬТР ДУБЛІКАТІВ ПО КЛЮЧОВИХ СЛОВАХ ─────────────────────────
-#
-# Логіка:
-#   1. З заголовку витягуємо "значущі" слова — прибираємо загальні слова
-#      (артиклі, прийменники, типові авто-слова які є скрізь)
-#   2. Після публікації кожне значуще слово зберігається в Redis як
-#      окремий ключ "tw:{слово}" на 7 днів
-#   3. При перевірці нової статті — рахуємо скільки її слів вже є в Redis
-#   4. Якщо збіг ≥ 3 слів → це та сама тема → пропускаємо
-#
-# Приклад чому це працює:
-#   Опубліковано: "Ford GT Mk IV sets Nurburgring lap record"
-#   → зберігаємо: tw:ford, tw:gt, tw:mk, tw:nurburgring, tw:record, tw:lap
-#
-#   Нова стаття: "Ford GT Mk IV is third fastest car at Nurburgring"
-#   → перевіряємо: ford✓ gt✓ mk✓ nurburgring✓ → збіг 4 слова → ДУБЛІКАТ
-# ─────────────────────────────────────────────────────────────────────────────
-
 TOPIC_STOP_WORDS = {
     'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
     'has', 'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might',
@@ -154,57 +139,61 @@ def save_title_fingerprint(title):
     print(f"🔑 Збережено {len(words)} ключових слів теми: {', '.join(list(words)[:6])}")
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── КОНТРОЛЕРИ ЧАСУ (КИЇВ) ТА ЗАВДАНЬ ────────────────────────────────────────
-def was_task_done_today(filename):
-    if not os.path.exists(filename):
-        return False
-    with open(filename, "r") as f:
-        return f.read().strip() == get_today_kyiv()
+# ── КОНТРОЛЕРИ ЧАСУ (КИЇВ) ТА ЗАВДАНЬ ЧЕРЕЗ REDIS ─────────────────────────
+def get_today_kyiv():
+    return datetime.now(pytz.utc).astimezone(KYIV_TZ).strftime("%Y-%m-%d")
 
-def was_weekly_done_this_week(filename):
-    if not os.path.exists(filename):
-        return False
+def was_task_done_today(task_key):
+    """Перевіряє в Redis, чи виконувалось завдання сьогодні"""
+    result = _redis(["GET", task_key])
+    if result and result.get("result") == get_today_kyiv():
+        return True
+    return False
+
+def mark_task_done(task_key):
+    """Записує в Redis поточну дату для виконаного завдання"""
+    _redis(["SET", task_key, get_today_kyiv()])
+    print(f"✅ Статус завдання {task_key} оновлено в Redis.")
+
+def was_weekly_done_this_week(task_key):
+    """Перевіряє в Redis, чи відправлявся тижневий дайджест цього тижня"""
     now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
     current_week = now.strftime("%Y-W%W")
-    with open(filename, "r") as f:
-        return f.read().strip() == current_week
+    result = _redis(["GET", task_key])
+    if result and result.get("result") == current_week:
+        return True
+    return False
 
-def mark_weekly_done(filename):
+def mark_weekly_done(task_key):
+    """Записує поточний тиждень у Redis після відправки тижневого дайджесту"""
     now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
-    with open(filename, "w") as f:
-        f.write(now.strftime("%Y-W%W"))
-
-def mark_task_done(filename):
-    with open(filename, "w") as f:
-        f.write(get_today_kyiv())
+    _redis(["SET", task_key, now.strftime("%Y-W%W")])
+    print(f"✅ Статус тижневого дайджесту {task_key} оновлено в Redis.")
 
 def check_scheduled_tasks():
     now = datetime.now(pytz.utc).astimezone(KYIV_TZ)
 
-    if now.hour == 10 and now.minute >= 0 and not was_task_done_today(DIGEST_DATE_FILE):
+    if now.hour == 10 and now.minute >= 0 and not was_task_done_today(DIGEST_DATE_KEY):
         send_morning_digest()
         return
 
     if (now.hour > 10 or (now.hour == 10 and now.minute >= 30)) \
-            and not was_task_done_today(MORNING_SCOUT_FILE):
+            and not was_task_done_today(MORNING_SCOUT_KEY):
         if now.hour < 22:
             print("\n⏰ Час для першої порції новин (10:30+ за Києвом)")
-            mark_task_done(MORNING_SCOUT_FILE)
+            mark_task_done(MORNING_SCOUT_KEY)
             run_news_scout()
             return
 
     if now.weekday() == 6 and now.hour == 21 and now.minute >= 45 \
-            and not was_weekly_done_this_week(WEEKLY_DATE_FILE):
+            and not was_weekly_done_this_week(WEEKLY_DATE_KEY):
         send_weekly_digest()
         return
 
-    if now.hour == 22 and now.minute >= 0 and not was_task_done_today(EVENING_DATE_FILE):
+    if now.hour == 22 and now.minute >= 0 and not was_task_done_today(EVENING_DATE_KEY):
         send_evening_message()
         return
 # ─────────────────────────────────────────────────────────────────────────────
-
-def get_today_kyiv():
-    return datetime.now(pytz.utc).astimezone(KYIV_TZ).strftime("%Y-%m-%d")
 
 RSS_STOP_WORDS_EXACT = [
     "мотоцикл", "мото", "скутер", "квадроцикл",
@@ -270,9 +259,6 @@ def smart_sleep(seconds):
 def process_and_send(data, url, processed_urls):
 
     # ── ФІНАЛЬНА ПЕРЕВІРКА перед відправкою ──────────────────────────────────
-    # Захист від деплою: якщо два екземпляри бота запустились одночасно,
-    # перший хто дійде до цієї точки — запише URL в Redis і відправить пост.
-    # Другий побачить що URL вже є і тихо зупиниться без повторної публікації.
     if is_url_already_published(url):
         processed_urls.add(url)
         return True
@@ -321,7 +307,7 @@ def process_and_send(data, url, processed_urls):
     return True
 
 def send_morning_digest():
-    if was_task_done_today(DIGEST_DATE_FILE):
+    if was_task_done_today(DIGEST_DATE_KEY):
         print("⏭️ Дайджест сьогодні вже відправлявся.")
         return
     print("\n🌅 Відправляю ранковий дайджест...")
@@ -329,26 +315,26 @@ def send_morning_digest():
         digest_msg = morning_digest.build_morning_digest()
         success    = telegram_bot.send_telegram_message(text=digest_msg)
         if success:
-            mark_task_done(DIGEST_DATE_FILE)
+            mark_task_done(DIGEST_DATE_KEY)
             print("✅ Дайджест відправлено!")
     except Exception as e:
         print(f"❌ Помилка дайджесту: {type(e).__name__}: {e}")
 
 def send_weekly_digest():
-    if was_weekly_done_this_week(WEEKLY_DATE_FILE):
+    if was_weekly_done_this_week(WEEKLY_DATE_KEY):
         print("⏭️ Тижневий дайджест цього тижня вже відправлявся.")
         return
     print("\n📊 Відправляю тижневий дайджест...")
     try:
         success = weekly_digest.send_weekly_digest()
         if success:
-            mark_weekly_done(WEEKLY_DATE_FILE)
+            mark_weekly_done(WEEKLY_DATE_KEY)
             print("✅ Тижневий дайджест відправлено!")
     except Exception as e:
         print(f"❌ Помилка тижневого дайджесту: {type(e).__name__}: {e}")
 
 def send_evening_message():
-    if was_task_done_today(EVENING_DATE_FILE):
+    if was_task_done_today(EVENING_DATE_KEY):
         print("⏭️ Вечірнє повідомлення сьогодні вже відправлялось.")
         return
 
@@ -376,7 +362,7 @@ def send_evening_message():
 
         success = telegram_bot.send_telegram_message(text=final_msg)
         if success:
-            mark_task_done(EVENING_DATE_FILE)
+            mark_task_done(EVENING_DATE_KEY)
             print("✅ Вечірнє повідомлення відправлено!")
     except Exception as e:
         print(f"❌ Помилка вечірнього повідомлення: {e}")
