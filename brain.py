@@ -4,6 +4,7 @@ import re
 import time
 from google import genai
 from dotenv import load_dotenv
+import config
 
 load_dotenv()
 
@@ -29,7 +30,7 @@ def summarize_text(article_text, original_title, is_morning=False):
     article_text_trimmed = article_text[:MAX_CHARS]
 
     prompt = f"""
-    Ти — Агент Софія, головний аналітик Skoda_Kremen_News. 
+    Ти — Агент Софія, головний аналітик {config.CHANNEL_NAME}. 
     Твій стиль: спокійний, експертний, без сленгу. 
     Пиши від жіночого роду (наприклад: "я проаналізувала", "вважаю").
     

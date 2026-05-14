@@ -6,7 +6,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "🤖 AutoPixel AI News Bot is Running 24/7!"
+    return "🤖 AutoPulse News Bot is Running 24/7!"
 
 # ── ТИМЧАСОВИЙ МАРШРУТ ДЛЯ ТЕСТУ ДАЙДЖЕСТУ ──────────────────────────────────
 # Після успішного тесту — видали цей блок і залий знову на GitHub

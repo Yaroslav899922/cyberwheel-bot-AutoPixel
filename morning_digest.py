@@ -2,6 +2,7 @@ import requests
 import os
 from datetime import datetime
 import pytz
+import config
 
 WEATHER_API_KEY    = os.getenv("WEATHER_API_KEY", "")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "")
@@ -138,7 +139,7 @@ def build_morning_digest():
         f"{crypto}\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🚗 Гарного дня та безпечної дороги!\n"
-        f"<i>Skoda Kremen News</i>"
+        f"<i>{config.CHANNEL_NAME}</i>"
     )
     return message
 

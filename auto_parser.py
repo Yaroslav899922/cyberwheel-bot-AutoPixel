@@ -14,6 +14,7 @@ import brain
 import telegram_bot
 import morning_digest
 import weekly_digest          # 🆕 Тижневий дайджест
+import config
 
 DB_FILE            = "parsed_urls.txt"
 DIGEST_DATE_FILE   = "last_digest_date.txt"
@@ -292,13 +293,7 @@ def process_and_send(data, url, processed_urls):
         final_msg = raw_summary
 
     source_link  = f"\n\n<a href='{url}'><b>Читати повністю →</b></a>" if url else ""
-    social_links = (
-        "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
-        "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
-        "📘 <a href='https://www.facebook.com/skodakremen'>Facebook</a>  |  "
-        "🌐 <a href='https://www.avtocenter-kremenchuk.site/'>Наш сайт</a>"
-    )
-    final_msg += source_link + social_links
+    final_msg += source_link + config.SOCIAL_LINKS
 
     success = telegram_bot.send_telegram_message(
         text=final_msg,
@@ -358,7 +353,7 @@ def send_evening_message():
         return
 
     print("\n🌙 Відправляю вечірнє побажання...")
-    prompt = """Ти — Агент Софія, куратор автоканалу Skoda_Kremen_News. 
+    prompt = f"""Ти — Агент Софія, куратор автоканалу {config.CHANNEL_NAME}. 
     Напиши коротке побажання на добраніч (1-2 речення).
     Сенс: на сьогодні потік новин завершено, час відпочивати.
     СУВОРІ ПРАВИЛА:
@@ -377,13 +372,7 @@ def send_evening_message():
         ai_text = re.sub(r'[*_`]', '', ai_text)
 
         final_msg = f"🌙 <b>НА ДОБРАНІЧ</b>\n\n{ai_text}\n\n✨ <i>Ваш Агент Софія</i>"
-        social_links = (
-            "\n\n📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
-            "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
-            "📘 <a href='https://www.facebook.com/skodakremen'>Facebook</a>  |  "
-            "🌐 <a href='https://www.avtocenter-kremenchuk.site/'>Наш сайт</a>"
-        )
-        final_msg += social_links
+        final_msg += config.SOCIAL_LINKS
 
         success = telegram_bot.send_telegram_message(text=final_msg)
         if success:

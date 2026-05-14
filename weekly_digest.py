@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 # ── ЗАЛЕЖНОСТІ (ті самі що в auto_parser.py) ─────────────────────────────────
 import brain
 import telegram_bot
+import config
 
 KYIV_TZ     = pytz.timezone("Europe/Kiev")
 REDIS_URL   = os.getenv("UPSTASH_REDIS_REST_URL")
@@ -232,7 +233,7 @@ def pick_top7_with_gemini(headlines: list[dict]) -> list[dict] | None:
         f"{i+1}. {h['title']}" for i, h in enumerate(headlines)
     )
 
-    prompt = f"""Ти — Агент Софія, аналітик автомобільного каналу Skoda_Kremen_News.
+    prompt = f"""Ти — Агент Софія, аналітик автомобільного каналу {config.CHANNEL_NAME}.
 Ось попередньо відібрані найважливіші новини тижня:
 
 {numbered}
@@ -318,7 +319,7 @@ def get_weekly_verdict(top7: list[dict]) -> str:
     """
     titles_str = "\n".join(f"- {item['title']}" for item in top7)
 
-    prompt = f"""Ти — Агент Софія, аналітик автомобільного каналу Skoda_Kremen_News.
+    prompt = f"""Ти — Агент Софія, аналітик автомобільного каналу {config.CHANNEL_NAME}.
 Пиши від жіночого роду ("я проаналізувала", "вважаю").
 
 Ось 7 головних автоновин цього тижня:
@@ -433,13 +434,6 @@ def build_weekly_digest_message() -> str | None:
 
     news_block = "\n\n".join(news_lines)
 
-    social_links = (
-        "📷 <a href='https://www.instagram.com/avtocenter_skoda/'>Instagram</a>  |  "
-        "🎵 <a href='https://www.tiktok.com/@skoda_kremen'>TikTok</a>  |  "
-        "📘 <a href='https://www.facebook.com/skodakremen'>Facebook</a>  |  "
-        "🌐 <a href='https://www.avtocenter-kremenchuk.site/'>Наш сайт</a>"
-    )
-
     message = (
         f"🏆 <b>ТОП-7 НОВИН ТИЖНЯ</b>\n"
         f"<i>Агент Софія підготувала головне за {date_range}</i>\n"
@@ -448,8 +442,8 @@ def build_weekly_digest_message() -> str | None:
         f"━━━━━━━━━━━━━━━━━━\n"
         f"💬 <b>Вердикт Агента Софії:</b>\n"
         f"<blockquote expandable>{verdict}</blockquote>\n\n"
-        f"✨ <i>Ваш Агент Софія</i>\n\n"
-        f"{social_links}"
+        f"✨ <i>Ваш Агент Софія</i>"
+        f"{config.SOCIAL_LINKS}"
     )
 
     # Після збірки — очищаємо список для наступного тижня
