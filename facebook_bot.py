@@ -19,18 +19,24 @@ def send_facebook_post(message, image_url=None, source_url=None):
         print("⚠️ Facebook API ключі не знайдено. Пропускаємо публікацію у FB.")
         return False
 
-    # 1. Очищаємо текст від Telegram-тегів (<b>, <i>, <a> тощо)
-    clean_message = re.sub(r'<[^>]+>', '', message)
+    # 1. Обробляємо blockquote (Вердикт Софії) ДО очищення — обрамляємо лініями
+    clean_message = re.sub(
+        r'<blockquote[^>]*>(.*?)</blockquote>',
+        r'\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\1\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️',
+        message, flags=re.DOTALL
+    )
 
-    # 2. Прибираємо хвіст із соцмережами (у FB-пості він без посилань — лише сміття)
+    # 2. Знімаємо всі інші HTML-теги (<b>, <i>, <a> тощо)
+    clean_message = re.sub(r'<[^>]+>', '', clean_message)
+
+    # 3. Прибираємо хвіст із соцмережами (у FB-пості він без посилань — лише сміття)
     #    Блок соцмереж починається з рядка про Instagram.
     clean_message = re.split(r'\n+📷\s*Instagram', clean_message)[0].strip()
 
-    # 3. Відновлюємо посилання на джерело (оскільки ми вирізали тег <a>)
-    if source_url and "Читати повністю" in clean_message:
-        clean_message = clean_message.replace("Читати повністю →", f"Читати повністю: {source_url}")
-    elif source_url:
-        clean_message += f"\n\nДжерело: {source_url}"
+    # 4. Прибираємо рядок "Читати повністю →" — поставимо URL прямо в кінці
+    if source_url:
+        clean_message = clean_message.replace("Читати повністю →", "").strip()
+        clean_message += f"\n\n🔗 {source_url}"
 
     try:
         if image_url:
