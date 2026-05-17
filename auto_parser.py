@@ -293,6 +293,11 @@ def process_and_send(data, url, processed_urls):
         processed_urls.add(url)
         print(f"✅ Збережено в хмарну базу: {url[:60]}...")
 
+        # 📊 Статистика: лічильник публікацій за день (зберігається 30 днів)
+        stats_key = f"daily_stats:{get_today_kyiv()}"
+        _redis(["INCR", stats_key])
+        _redis(["EXPIRE", stats_key, "2592000"])
+
         save_title_fingerprint(data.get('title', ''))
 
         weekly_digest.add_headline_to_weekly(ua_title, url)
