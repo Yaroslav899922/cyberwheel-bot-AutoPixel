@@ -10,3 +10,5 @@ python-dotenv
 lxml_html_clean
 beautifulsoup4==4.12.3
 schedule==1.2.2
+Pillow==10.4.0
+imageio-ffmpeg==0.5.1

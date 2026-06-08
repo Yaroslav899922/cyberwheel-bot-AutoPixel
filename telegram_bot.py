@@ -2,6 +2,8 @@ import requests
 import sys
 import os
 import json
+import mimetypes
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,6 +13,15 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
+
+def _redact_telegram_token(value):
+    """Не дозволяє випадково вивести TELEGRAM_TOKEN у логи."""
+    text = str(value)
+    if TELEGRAM_TOKEN:
+        text = text.replace(TELEGRAM_TOKEN, "***TELEGRAM_TOKEN***")
+    return text
+
 
 def send_telegram_message(text, url=None, image_url=None):
     """
@@ -58,14 +69,86 @@ def send_telegram_message(text, url=None, image_url=None):
 
         if response.status_code == 200:
             print("📤 [Telegram] Повідомлення успішно відправлено!")
-            return True  # ✅ успіх
+            return True
         else:
-            print(f"❌ [Telegram] Помилка. Код: {response.status_code}, Відповідь: {response.text}")
+            print(f"❌ [Telegram] Помилка. Код: {response.status_code}, Відповідь: {_redact_telegram_token(response.text)}")
             return False
 
     except Exception as e:
-        print(f"❌ [Telegram] Помилка з'єднання: {type(e).__name__}: {e}")
+        print(f"❌ [Telegram] Помилка з'єднання: {type(e).__name__}: {_redact_telegram_token(e)}")
         return False
+
+
+def send_telegram_video(video_path, caption=None, parse_mode=None):
+    """
+    Відправляє локальний MP4/MOV/WebM-файл у Telegram як відео.
+
+    Використовується для MVP Reels: бот генерує ролик і надсилає його
+    у Telegram на ручну перевірку. Функція НЕ публікує відео у Facebook
+    і НЕ змінює логіку основного парсера.
+
+    Args:
+        video_path: шлях до локального відеофайлу.
+        caption: необов'язковий підпис до відео. Telegram має ліміт
+            1024 символи для caption, тому довгий текст обрізається.
+        parse_mode: можна передати "HTML", якщо caption уже безпечний HTML.
+            За замовчуванням None, щоб не ламати відправку через випадкові теги.
+
+    Returns:
+        True при успішній відправці, False при помилці.
+    """
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("❌ Помилка Telegram Video: TELEGRAM_TOKEN або CHAT_ID не знайдено!")
+        return False
+
+    path = Path(video_path)
+    if not path.exists() or not path.is_file():
+        print(f"❌ [Telegram Video] Файл не знайдено: {path}")
+        return False
+
+    if path.suffix.lower() not in {".mp4", ".mov", ".webm", ".mkv"}:
+        print(f"❌ [Telegram Video] Непідтримуваний формат відео: {path.suffix}")
+        return False
+
+    max_video_bytes = 49 * 1024 * 1024
+    file_size = path.stat().st_size
+    if file_size > max_video_bytes:
+        print(f"❌ [Telegram Video] Файл завеликий для безпечного upload: {file_size / 1024 / 1024:.1f} MB")
+        return False
+
+    endpoint = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVideo"
+
+    payload = {
+        "chat_id": CHAT_ID,
+        "supports_streaming": "true",
+    }
+
+    if caption:
+        safe_caption = str(caption).strip()
+        if len(safe_caption) > 1000:
+            safe_caption = safe_caption[:997].rstrip() + "..."
+        payload["caption"] = safe_caption
+
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+
+    try:
+        with path.open("rb") as video_file:
+            mime_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
+            files = {"video": (path.name, video_file, mime_type)}
+            response = requests.post(endpoint, data=payload, files=files, timeout=90)
+
+        if response.status_code == 200:
+            print("📤 [Telegram Video] Відео успішно відправлено!")
+            return True
+
+        print(f"❌ [Telegram Video] Помилка. Код: {response.status_code}, Відповідь: {_redact_telegram_token(response.text)}")
+        return False
+
+    except Exception as e:
+        print(f"❌ [Telegram Video] Помилка з'єднання: {type(e).__name__}: {_redact_telegram_token(e)}")
+        return False
+
 
 if __name__ == "__main__":
     if not TELEGRAM_TOKEN:
